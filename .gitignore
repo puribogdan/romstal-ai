@@ -57,6 +57,7 @@ wa-ai/romstal_assistant.log
 # Project specific
 *.pdf
 *.tmp
+n8n/
 
 # Node.js (if needed for n8n)
 node_modules/
