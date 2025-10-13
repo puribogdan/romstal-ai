@@ -3,6 +3,7 @@ uvicorn[standard]
 supabase
 python-dotenv
 httpx
+requests
 openai
 pydantic
 pydantic-settings
