@@ -223,9 +223,10 @@ class LLMClient:
                 r.raise_for_status()
                 data = r.json()  # API-ul tău returnează JSON
 
-            clean = self.extract_relevant_product_data(data)
-            clean = self.remove_none_fields(clean)
-            return {"ok": True, "code": code, "data": clean}
+            # Temporarily commented out filtering to return all data
+            # clean = self.extract_relevant_product_data(data)
+            # clean = self.remove_none_fields(clean)
+            return {"ok": True, "code": code, "data": data}
 
         except Exception as e:
             logger.error(f"[tool_fetch_product_details] {e}")
