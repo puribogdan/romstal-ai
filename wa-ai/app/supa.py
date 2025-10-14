@@ -15,6 +15,7 @@ class SupabaseClient:
         self._table: str = ""
         self.max_retries = 3
         self.retry_delay = 0.5  # seconds
+        self._cleanup_counter = 0  # Counter for periodic cleanup tasks
 
     @property
     def client(self) -> Client:
@@ -504,6 +505,217 @@ class SupabaseClient:
                 error_msg = f"Failed to insert OCR result for message_insert_id: {message_insert_id}"
                 logger.error(f"[OCR] [{correlation_id}] {error_msg}: {type(e).__name__}: {e}")
                 raise
+
+    def store_product_link_context(self, session_id: int, phone_number: str, product_links: List[Dict[str, Any]], message_insert_id: int) -> bool:
+        """
+        Store product link context for a conversation session.
+
+        Args:
+            session_id: Conversation session ID
+            phone_number: Phone number for the conversation
+            product_links: List of product link data dictionaries
+            message_insert_id: Database insert ID of the message where links were displayed
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        correlation_id = generate_correlation_id()
+
+        with CorrelationContext(correlation_id):
+            try:
+                logger.info(f"[PRODUCT-CONTEXT] [{correlation_id}] Storing {len(product_links)} product links for session {session_id}")
+
+                # Calculate expiry time (24 hours from now)
+                expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+
+                # Prepare context records for insertion
+                context_records = []
+                for link_data in product_links:
+                    context_records.append({
+                        "conversation_session_id": session_id,
+                        "phone_number": phone_number,
+                        "product_url": link_data.get("url", ""),
+                        "product_code": link_data.get("code", ""),
+                        "product_name": link_data.get("name", ""),
+                        "displayed_at": datetime.now(timezone.utc).isoformat(),
+                        "message_insert_id": message_insert_id,
+                        "context_expires_at": expires_at.isoformat()
+                    })
+
+                if context_records:
+                    # Insert context records
+                    result = self.client.table("product_link_context").insert(context_records).execute()
+                    logger.info(f"[PRODUCT-CONTEXT] [{correlation_id}] Successfully stored {len(context_records)} product link contexts")
+                    return True
+                else:
+                    logger.warning(f"[PRODUCT-CONTEXT] [{correlation_id}] No valid product links to store")
+                    return True
+
+            except Exception as e:
+                logger.error(f"[PRODUCT-CONTEXT] [{correlation_id}] Failed to store product link context: {type(e).__name__}: {e}")
+                return False
+
+    def get_product_link_context(self, phone_number: str, session_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Retrieve active product link context for a conversation.
+
+        Args:
+            phone_number: Phone number for the conversation
+            session_id: Optional session ID to filter by
+
+        Returns:
+            List of active product link context records
+        """
+        correlation_id = generate_correlation_id()
+
+        with CorrelationContext(correlation_id):
+            try:
+                logger.info(f"[PRODUCT-CONTEXT] [{correlation_id}] Retrieving product link context for phone: {phone_number}")
+
+                # Build query for active context (not expired)
+                query = self.client.table("product_link_context")\
+                    .select("*")\
+                    .eq("phone_number", phone_number)\
+                    .gte("context_expires_at", datetime.now(timezone.utc).isoformat())\
+                    .order("displayed_at", desc=True)
+
+                # Add session filter if provided
+                if session_id:
+                    query = query.eq("conversation_session_id", session_id)
+
+                result = query.execute()
+
+                context_records = result.data or []
+                logger.info(f"[PRODUCT-CONTEXT] [{correlation_id}] Retrieved {len(context_records)} active product link contexts")
+
+                return context_records
+
+            except Exception as e:
+                logger.error(f"[PRODUCT-CONTEXT] [{correlation_id}] Failed to retrieve product link context: {type(e).__name__}: {e}")
+                return []
+
+    def cleanup_expired_context(self, phone_number: Optional[str] = None) -> int:
+        """
+        Clean up expired product link context records.
+
+        Args:
+            phone_number: Optional phone number to clean up context for
+
+        Returns:
+            int: Number of records cleaned up
+        """
+        correlation_id = generate_correlation_id()
+
+        with CorrelationContext(correlation_id):
+            try:
+                logger.info(f"[PRODUCT-CONTEXT] [{correlation_id}] Cleaning up expired product link context")
+
+                # First get expired records to count them
+                query = self.client.table("product_link_context")\
+                    .select("id")\
+                    .lt("context_expires_at", datetime.now(timezone.utc).isoformat())
+
+                # Add phone filter if provided
+                if phone_number:
+                    query = query.eq("phone_number", phone_number)
+
+                expired_result = query.execute()
+                expired_records = expired_result.data or []
+
+                if not expired_records:
+                    logger.info(f"[PRODUCT-CONTEXT] [{correlation_id}] No expired records found")
+                    return 0
+
+                # Delete expired records
+                delete_query = self.client.table("product_link_context")\
+                    .delete()\
+                    .lt("context_expires_at", datetime.now(timezone.utc).isoformat())
+
+                # Add phone filter if provided
+                if phone_number:
+                    delete_query = delete_query.eq("phone_number", phone_number)
+
+                delete_result = delete_query.execute()
+
+                deleted_count = len(expired_records)
+                logger.info(f"[PRODUCT-CONTEXT] [{correlation_id}] Cleaned up {deleted_count} expired product link contexts")
+
+                return deleted_count
+
+            except Exception as e:
+                logger.error(f"[PRODUCT-CONTEXT] [{correlation_id}] Failed to cleanup expired context: {type(e).__name__}: {e}")
+                return 0
+
+    def format_product_context_for_prompt(self, context_records: List[Dict[str, Any]]) -> str:
+        """
+        Format product link context for inclusion in LLM prompts.
+
+        Args:
+            context_records: List of product link context records
+
+        Returns:
+            str: Formatted context string for LLM prompt
+        """
+        if not context_records:
+            return ""
+
+        context_lines = []
+        context_lines.append("Produse discutate anterior în conversație:")
+
+        for i, record in enumerate(context_records[:5], 1):  # Limit to last 5 products
+            product_name = record.get("product_name", "Produs necunoscut")
+            product_url = record.get("product_url", "")
+            product_code = record.get("product_code", "")
+
+            context_line = f"{i}. {product_name}"
+            if product_code:
+                context_line += f" (cod: {product_code})"
+            if product_url:
+                context_line += f" - {product_url}"
+
+            context_lines.append(context_line)
+
+        context_lines.append("")  # Add spacing
+        return "\n".join(context_lines)
+
+    def reset_conversation_context(self, phone_number: str, session_id: Optional[int] = None) -> bool:
+        """
+        Reset/clear product link context for a conversation.
+        This is useful when conversations are reset or need a fresh start.
+
+        Args:
+            phone_number: Phone number for the conversation
+            session_id: Optional specific session ID to reset
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        correlation_id = generate_correlation_id()
+
+        with CorrelationContext(correlation_id):
+            try:
+                logger.info(f"[PRODUCT-CONTEXT] [{correlation_id}] Resetting product link context for phone: {phone_number}")
+
+                # Delete context records for this conversation
+                query = self.client.table("product_link_context").delete()
+
+                # Add filters
+                if session_id:
+                    query = query.eq("conversation_session_id", session_id)
+                else:
+                    query = query.eq("phone_number", phone_number)
+
+                result = query.execute()
+
+                # Count deleted records (we'll estimate based on phone filter)
+                deleted_count = len(result.data or []) if result.data else 0
+                logger.info(f"[PRODUCT-CONTEXT] [{correlation_id}] Reset {deleted_count} product link contexts for phone: {phone_number}")
+
+                return True
+
+            except Exception as e:
+                logger.error(f"[PRODUCT-CONTEXT] [{correlation_id}] Failed to reset conversation context: {type(e).__name__}: {e}")
+                return False
 
 
 # Global Supabase client instance

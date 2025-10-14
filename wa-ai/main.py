@@ -19,6 +19,9 @@ from app.ocr import ocr_client
 # Import PDF handler
 from handlers.handle_pdf_message import pdf_handler
 
+# Import product recommendation handler
+from handlers.handle_product_recommendation import product_recommendation_handler
+
 # Import the correct two-step media URL function
 from integrations.ocr_supabase import get_media_download_url_from_id
 
@@ -276,6 +279,37 @@ async def process_pdf_message(message_data: Dict[str, Any], insert_id: int) -> O
 
     except Exception as e:
         logger.error(f"[PDF] [DIAGNOSTIC] Exception during PDF processing for insert_id: {insert_id}: {type(e).__name__}: {e}")
+        return None
+
+
+async def process_product_recommendation_message(insert_id: int) -> Optional[str]:
+    """
+    Process a product recommendation message using the product recommendation handler.
+
+    Args:
+        insert_id: Database insert ID of the message
+
+    Returns:
+        AI response text if successful, None if failed
+    """
+    try:
+        logger.info(f"[PRODUCT-REC] [DIAGNOSTIC] Starting product recommendation processing for insert_id: {insert_id}")
+
+        # Call product recommendation handler
+        logger.info(f"[PRODUCT-REC] [DIAGNOSTIC] Calling product recommendation handler for insert_id: {insert_id}")
+        result = await product_recommendation_handler.handle_product_recommendation(
+            insert_id=insert_id
+        )
+
+        if result.get("success"):
+            logger.info(f"[PRODUCT-REC] [DIAGNOSTIC] Successfully processed product recommendation for insert_id: {insert_id}, response length: {len(result.get('ai_response', ''))}")
+            return result["ai_response"]
+        else:
+            logger.error(f"[PRODUCT-REC] [DIAGNOSTIC] Product recommendation processing failed for insert_id: {insert_id}: {result.get('error')}")
+            return None
+
+    except Exception as e:
+        logger.error(f"[PRODUCT-REC] [DIAGNOSTIC] Exception during product recommendation processing for insert_id: {insert_id}: {type(e).__name__}: {e}")
         return None
 
 
@@ -545,6 +579,22 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
             "note": "Response already sent by PDF handler"
         }
 
+    # Check if this message should trigger product recommendations
+    # The LLM will automatically decide based on message content and use appropriate tools
+    product_rec_response = await process_product_recommendation_message(payload.id or 0)
+
+    if product_rec_response:
+        # Product recommendation was successfully processed, response already sent by handler
+        logger.info(f"[PRODUCT-REC] Product recommendation processed successfully, response sent by handler")
+
+        return {
+            "ok": True,
+            "conversation_count": len(recent_messages),
+            "ai_reply": product_rec_response,
+            "processed_as": "product_recommendation",
+            "note": "Response already sent by product recommendation handler"
+        }
+
     # Use the current message for AI response (regular text processing)
     user_message_to_respond = current_message
 
@@ -552,6 +602,19 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
         reply_text = "Salut! Sunt asistentul Romstal. Cu ce te pot ajuta?"
         function_call_details = None
     else:
+        # Clean up expired product link context periodically (every ~10 messages)
+        cleanup_counter = getattr(supabase_client, '_cleanup_counter', 0)
+        if cleanup_counter >= 10:
+            try:
+                expired_count = supabase_client.cleanup_expired_context(phone)
+                if expired_count > 0:
+                    logger.info(f"[CLEANUP] Cleaned up {expired_count} expired product link contexts for {phone}")
+                supabase_client._cleanup_counter = 0
+            except Exception as e:
+                logger.warning(f"[CLEANUP] Error during context cleanup: {e}")
+        else:
+            supabase_client._cleanup_counter = cleanup_counter + 1
+
         # Get or create conversation session FIRST to access function call history
         print(f"[SESSION] Getting or creating conversation session for {phone}")
         session = supabase_client.get_or_create_conversation_session(phone, "")
@@ -582,6 +645,18 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
         for m in recent_messages:
             hist_lines.append(f"- {m['from']}: {m['text']}")
 
+        # Add product link context for follow-up questions
+        product_context = ""
+        if session:
+            try:
+                # Get active product link context for this conversation
+                context_records = supabase_client.get_product_link_context(phone, int(session["id"]))
+                if context_records:
+                    product_context = supabase_client.format_product_context_for_prompt(context_records)
+                    logger.info(f"[CONTEXT] Retrieved {len(context_records)} product link contexts for follow-up questions")
+            except Exception as e:
+                logger.warning(f"[CONTEXT] Error retrieving product link context: {e}")
+
         hist_context = "\n".join(hist_lines)
 
         # Debug logging
@@ -602,6 +677,8 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
             "- Nu poti sa ghidezi utilizatorul recomandandu-i produse\n"
             "- Nu face follow-up pentru a oferi servicii sau a iniția alte conversații.\n"
             "- Poți face follow-up doar despre produsul sau subiectul discutat (ex: recomandări similare, specificații, întreținere, garanție etc.).\n"
+            "- Poți referi utilizatorul la produse discutate anterior în conversație pentru întrebări de follow-up.\n"
+            "- Dacă utilizatorul întreabă despre produse menționate anterior, poți oferi informații suplimentare despre acestea.\n"
             "- Menține un ton profesionist, empatic și prietenos, ca un consultant Romstal care vorbește relaxat, dar informat.\n"
             "- Nu poti verifica termenul de livrare al unui produs\n"
             "- Nu face follow-up questions pentru a oferi servicii sau a iniția alte conversații.\n"
@@ -613,8 +690,10 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
 
         user_prompt = (
             f"Context conversație (include apeluri funcții anterioare):\n{hist_context}\n\n"
+            f"{product_context}"
             f"Mesajul utilizatorului: {user_message_to_respond}\n\n"
-            "Generează un răspuns helpful și natural în română, folosind contextul complet de mai sus."
+            "Generează un răspuns helpful și natural în română, folosind contextul complet de mai sus. "
+            "Dacă utilizatorul întreabă despre produse menționate anterior, poți referi la acestea și oferi informații suplimentare."
         )
 
         # Call LLM with tools and capture any function call details
