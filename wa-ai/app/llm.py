@@ -49,9 +49,9 @@ class LLMClient:
         },
         {
             "type": "web_search",
-            # Built-in tool: do NOT add name/description/parameters here.
+            "filters": {"allowed_domains": ["romstal.ro"]},
             "user_location": {"type": "approximate", "country": "RO", "city": "București"},
-            "filters": {"allowed_domains": ["romstal.ro"]}
+            "search_context_size": "low"
         }
     ]
 
@@ -206,15 +206,17 @@ class LLMClient:
                     query = ""
                     sources = None
 
-                calls.append({
-                    "id": getattr(item, "id", None),
-                    "type": "web_search_call",
-                    "name": "web_search",
-                    "args": {
-                        "query": query,
-                        "sources": sources
-                    }
-                })
+                # Only process web search calls that have an actual query
+                if query:
+                    calls.append({
+                        "id": getattr(item, "id", None),
+                        "type": "web_search_call",
+                        "name": "web_search",
+                        "args": {
+                            "query": query,
+                            "sources": sources
+                        }
+                    })
 
         return calls
 
@@ -361,31 +363,87 @@ class LLMClient:
                 if has_web_search:
                     logger.info(f"[OpenAI] [{correlation_id}] Web search tool available, using medium reasoning effort")
 
-                response = self.client.responses.create(
-                    model=settings.openai_model,
-                    input=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "Ești asistent Romstal pe WhatsApp. "
-                                "Dacă utilizatorul furnizează clar un cod de produs (ex: 64px9822), "
-                                "apelează funcția `fetch_product_details`. "
-                                "Dacă cere recomandări de produse sau ce să cumpere într-un anumit scenariu, apeleaza funcția `web_search`.  "
-                                "După orice căutare, sintetizează un răspuns final concis pentru utilizator, "
-                                "chiar dacă nu găsești rezultate, explică ce ai verificat și ce informații îți lipsesc. "
-                                "Arată cele mai relevante linkuri. "
-                                "Nu modifica URL-urile sau alte date. "
-                                "Răspunde prietenos, în română.\n\n"
-                                + system_prompt
-                            )
-                        },
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    tools=self.OPENAI_TOOLS,
-                    tool_choice="auto",
-                    max_output_tokens=3500,  # Increased from 700 to allow for reasoning + response
-                    reasoning={"effort": reasoning_effort}
-                )
+                # Retry configuration for token ceiling issues
+                max_retries = 2
+                current_search_context_size = "low"
+                response = None
+
+                for attempt in range(max_retries):
+                    try:
+                        # Update tools with current search context size if web search is used
+                        current_tools = self.OPENAI_TOOLS.copy()
+                        if has_web_search and current_search_context_size == "medium":
+                            # Update the web_search tool with medium context size
+                            for tool in current_tools:
+                                if tool.get("type") == "web_search":
+                                    tool["search_context_size"] = "medium"
+                                    break
+
+                        current_max_tokens = 1200 + (attempt * 400)  # Increase by 400 on retry
+
+                        logger.info(f"[OpenAI] [{correlation_id}] Attempt {attempt + 1}/{max_retries} with search_context_size={current_search_context_size}, max_tokens={current_max_tokens}")
+
+                        response = self.client.responses.create(
+                            model=settings.openai_model,
+                            input=[
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "Ești asistent Romstal pe WhatsApp. "
+                                        "Dacă utilizatorul furnizează clar un cod de produs (ex: 64px9822), "
+                                        "apelează funcția `fetch_product_details`. "
+                                        "Dacă cere recomandări de produse sau ce să cumpere într-un anumit scenariu, apeleaza funcția `web_search`.  "
+                                        "După orice căutare, sintetizează un răspuns final concis pentru utilizator, "
+                                        "chiar dacă nu găsești rezultate, explică ce ai verificat și ce informații îți lipsesc. "
+                                        "Arată cele mai relevante linkuri. "
+                                        "Nu modifica URL-urile sau alte date. "
+                                        "Răspunde prietenos, în română.\n\n"
+                                        + system_prompt
+                                    )
+                                },
+                                {"role": "user", "content": user_prompt},
+                            ],
+                            tools=current_tools,
+                            tool_choice="auto",
+                            max_output_tokens=current_max_tokens,
+                            reasoning={"effort": reasoning_effort}
+                        )
+
+                        # Check if response was truncated due to token limit - short-circuit for immediate handling
+                        if hasattr(response, 'incomplete_details') and response.incomplete_details:
+                            if response.incomplete_details.reason == "max_output_tokens":
+                                logger.warning(f"[OpenAI] [{correlation_id}] Response truncated due to max_output_tokens, attempt {attempt + 1}")
+                                if attempt < max_retries - 1:  # Not the last attempt
+                                    if current_search_context_size == "low":
+                                        current_search_context_size = "medium"
+                                        logger.info(f"[OpenAI] [{correlation_id}] Retrying with search_context_size=medium")
+                                        continue
+                                    else:
+                                        logger.info(f"[OpenAI] [{correlation_id}] Already using search_context_size=medium, increasing tokens")
+                                        continue
+                                else:
+                                    logger.error(f"[OpenAI] [{correlation_id}] Final attempt failed due to max_output_tokens")
+                                    # Return concise fallback for partial results
+                                    fallback_text = "Am găsit informații parțiale. Pentru rezultate complete, te rog să reformulezi întrebarea mai specific."
+                                    return fallback_text, []
+                            else:
+                                logger.warning(f"[OpenAI] [{correlation_id}] Response incomplete for other reason: {response.incomplete_details.reason}")
+
+                        # Success - break out of retry loop
+                        break
+
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"[OpenAI] [{correlation_id}] Attempt {attempt + 1} failed: {e}, retrying...")
+                            continue
+                        else:
+                            logger.error(f"[OpenAI] [{correlation_id}] All {max_retries} attempts failed")
+                            raise e
+
+                # Ensure we have a response object
+                if response is None:
+                    logger.error(f"[OpenAI] [{correlation_id}] No response obtained after all retry attempts")
+                    return "Îmi pare rău, momentan nu pot procesa cererea. Te rog să încerci din nou mai târziu.", None
 
                 logger.info(f"[DEBUG] Initial response ID: {response.id}")
                 logger.info(f"[DEBUG] Initial response output type: {type(response.output)}")
@@ -404,8 +462,6 @@ class LLMClient:
                     # Step 3: Execute function calls
                     tool_outputs = []
                     function_call_history = []  # Track function calls and results
-
-                    # Initialize function_call_history here so it's available in both branches
 
                     for call in tool_calls:
                         function_name = call["name"]
@@ -501,7 +557,7 @@ class LLMClient:
                             input=follow_up_input,
                             tools=self.OPENAI_TOOLS,
                             previous_response_id=response.id,  # Thread the conversation
-                            max_output_tokens=2500,  # Ensure enough tokens for response after function call
+                            max_output_tokens=1000,  # Reduced to prevent token ceiling issues
                             reasoning={"effort": follow_up_reasoning_effort}
                         )
 
@@ -523,8 +579,8 @@ class LLMClient:
                             logger.error(f"[DEBUG] Follow-up response dump: {follow_up_response.model_dump()}")
 
                     else:
-                        # ✅ NEW: When only built-in tools (e.g., web_search) were used,
-                        # try to read the final text from THIS response.
+                        # ✅ When only built-in tools (e.g., web_search) were used,
+                        # extract text directly from the initial response - no follow-up call needed
                         logger.info("[DEBUG] Built-in tools used only; extracting text from initial response")
 
                         # Try output_text first
