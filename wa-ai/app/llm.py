@@ -102,29 +102,58 @@ class LLMClient:
         if isinstance(txt, str) and txt.strip():
             return txt.strip()
 
-        # 2) items -> content -> text (updated for Responses API)
+        # 2) Extract text from message items in output
         items = getattr(resp, "output", None)
         if isinstance(items, list):
-            for item in items:
-                # Skip reasoning items, but check function calls and web search calls for text content
+            # Collect all message texts in order
+            all_texts = []
+            print(f"[DEBUG] Processing {len(items)} output items for text extraction")
+
+            for i, item in enumerate(items):
                 item_type = getattr(item, "type", None)
-                if item_type in ["reasoning"]:
+
+                # Handle message items (main response content)
+                if item_type in ["message", "text"]:
+                    print(f"[DEBUG] Processing {item_type} item {i}")
+                    content = getattr(item, "content", None)
+                    if isinstance(content, list):
+                        for c in content:
+                            t = getattr(c, "text", None)
+                            if t:
+                                safe_t = t[:50] + "..." if len(t) > 50 else t
+                                print(f"[DEBUG]   Found text: '{safe_t}'")
+                            else:
+                                print(f"[DEBUG]   Found text: None")
+                            if isinstance(t, str) and t.strip():
+                                all_texts.append(t.strip())
+                                print(f"[DEBUG]   Added to all_texts, count now: {len(all_texts)}")
+
+                # Skip reasoning items entirely
+                elif item_type in ["reasoning"]:
                     continue
 
-                # Check if item has direct text content
-                content = getattr(item, "content", None)
-                if isinstance(content, list):
-                    for c in content:
-                        t = getattr(c, "text", None)
-                        if isinstance(t, str) and t.strip():
-                            return t.strip()
+                # For other items, check if they have direct text content
+                else:
+                    content = getattr(item, "content", None)
+                    if isinstance(content, list):
+                        for c in content:
+                            t = getattr(c, "text", None)
+                            if isinstance(t, str) and t.strip():
+                                all_texts.append(t.strip())
 
-                # For web_search_call items, check if there's any associated text
-                if item_type in ["function_call", "web_search_call"]:
-                    # Look for any text in the item that might be the response
-                    item_text = getattr(item, "output", None) or getattr(item, "result", None)
-                    if isinstance(item_text, str) and item_text.strip():
-                        return item_text.strip()
+                    # For web_search_call items, check if there's any associated text
+                    if item_type in ["function_call", "web_search_call"]:
+                        # Look for any text in the item that might be the response
+                        item_text = getattr(item, "output", None) or getattr(item, "result", None)
+                        if isinstance(item_text, str) and item_text.strip():
+                            all_texts.append(item_text.strip())
+
+            # Return concatenated texts if any found
+            if all_texts:
+                result = " ".join(all_texts).strip()
+                print(f"[DEBUG] Final concatenated text length: {len(result)}")
+                print(f"[DEBUG] Final concatenated text preview: '{result[:100]}...'")
+                return result
 
         # 3) fallback: caută „text” oriunde
         try:

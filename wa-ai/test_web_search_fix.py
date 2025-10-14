@@ -43,12 +43,24 @@ def create_mock_response_with_web_search():
     mock_item2.action = mock_action2
     mock_item2.status = "completed"
 
-    # Add a text response item
+    # Create mock content objects with text attribute
+    mock_content1 = Mock()
+    mock_content1.text = "Am găsit câteva centrale termice pe gaz de 24 kW pe site-ul Romstal."
+
+    mock_content2 = Mock()
+    mock_content2.text = "Rezultate căutare suplimentare."
+
+    # Add a message response item (more realistic for OpenAI responses)
+    mock_message_item = Mock()
+    mock_message_item.type = "message"
+    mock_message_item.content = [mock_content1]
+
+    # Also add a text item for completeness
     mock_text_item = Mock()
     mock_text_item.type = "text"
-    mock_text_item.content = [{"text": "Am găsit câteva centrale termice pe gaz de 24 kW pe site-ul Romstal."}]
+    mock_text_item.content = [mock_content2]
 
-    mock_response.output = [mock_item1, mock_item2, mock_text_item]
+    mock_response.output = [mock_item1, mock_item2, mock_message_item, mock_text_item]
     mock_response.output_text = "Am găsit câteva centrale termice pe gaz de 24 kW pe site-ul Romstal."
     mock_response.id = "resp_042c9e883ff126940068ee81919510819d8ada71a5c2534e67"
 
@@ -101,23 +113,47 @@ def test_text_extraction_with_web_search():
     # Create mock response with web search calls
     mock_response = create_mock_response_with_web_search()
 
+    # Debug: Check what's in the output items
+    print(f"[DEBUG] Output items count: {len(mock_response.output)}")
+    for i, item in enumerate(mock_response.output):
+        item_type = getattr(item, "type", "unknown")
+        print(f"[DEBUG] Item {i}: type={item_type}")
+        if item_type in ["message", "text"]:
+            content = getattr(item, "content", None)
+            if content and isinstance(content, list):
+                for j, c in enumerate(content):
+                    text = getattr(c, "text", None)
+                    try:
+                        print(f"[DEBUG]   Content {j}: '{text}'")
+                    except UnicodeEncodeError:
+                        print(f"[DEBUG]   Content {j}: [Romanian text: {len(text) if text else 0} chars]")
+
     # Test text extraction
     extracted_text = client._extract_text_from_responses(mock_response)
 
-    if extracted_text and "centrale termice" in extracted_text.lower():
+    # Debug output (handle Unicode)
+    try:
+        print(f"[DEBUG] Extracted text: '{extracted_text}'")
+    except UnicodeEncodeError:
+        print(f"[DEBUG] Extracted text: [Contains Romanian characters]")
+    print(f"[DEBUG] Text length: {len(extracted_text) if extracted_text else 0}")
+    print(f"[DEBUG] Contains 'centrale termice': {'centrale termice' in extracted_text.lower() if extracted_text else False}")
+    print(f"[DEBUG] Contains 'Rezultate': {'Rezultate' in extracted_text if extracted_text else False}")
+
+    if extracted_text and "centrale termice" in extracted_text.lower() and "Rezultate" in extracted_text:
         # Handle Unicode encoding for Windows console
         try:
             safe_text = extracted_text[:100] + "..." if len(extracted_text) > 100 else extracted_text
-            print(f"PASS: Successfully extracted text: '{safe_text}'")
+            print(f"PASS: Successfully extracted concatenated text: '{safe_text}'")
         except UnicodeEncodeError:
-            print("PASS: Successfully extracted text (contains Romanian characters)")
+            print("PASS: Successfully extracted concatenated text (contains Romanian characters)")
         return True
     else:
         # Handle Unicode encoding for Windows console
         try:
-            print(f"FAIL: Could not extract expected text. Got: '{extracted_text}'")
+            print(f"FAIL: Could not extract expected concatenated text. Got: '{extracted_text}'")
         except UnicodeEncodeError:
-            print("FAIL: Could not extract expected text (contains Romanian characters)")
+            print("FAIL: Could not extract expected concatenated text (contains Romanian characters)")
         return False
 
 
