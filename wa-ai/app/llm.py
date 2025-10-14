@@ -106,17 +106,25 @@ class LLMClient:
         items = getattr(resp, "output", None)
         if isinstance(items, list):
             for item in items:
-                # Skip reasoning items and function calls, look for text content
+                # Skip reasoning items, but check function calls and web search calls for text content
                 item_type = getattr(item, "type", None)
-                if item_type in ["reasoning", "function_call"]:
+                if item_type in ["reasoning"]:
                     continue
 
+                # Check if item has direct text content
                 content = getattr(item, "content", None)
                 if isinstance(content, list):
                     for c in content:
                         t = getattr(c, "text", None)
                         if isinstance(t, str) and t.strip():
                             return t.strip()
+
+                # For web_search_call items, check if there's any associated text
+                if item_type in ["function_call", "web_search_call"]:
+                    # Look for any text in the item that might be the response
+                    item_text = getattr(item, "output", None) or getattr(item, "result", None)
+                    if isinstance(item_text, str) and item_text.strip():
+                        return item_text.strip()
 
         # 3) fallback: caută „text” oriunde
         try:
@@ -145,15 +153,18 @@ class LLMClient:
 
     def _extract_tool_calls_from_response(self, resp):
         """
-        Extracts all function calls emitted by the Responses API.
+        Extracts all tool calls (function calls and web search calls) emitted by the Responses API.
         Returns a list of dicts like:
-          {"id": <call_id>, "name": <function_name>, "args": <dict>}
+          {"id": <call_id>, "type": <call_type>, "name": <function_name>, "args": <dict>}
         """
         calls = []
         output = getattr(resp, "output", []) or []
 
         for item in output:
-            if getattr(item, "type", None) == "function_call" and getattr(item, "name", None):
+            item_type = getattr(item, "type", None)
+
+            # Handle function calls
+            if item_type == "function_call" and getattr(item, "name", None):
                 raw_args = getattr(item, "arguments", {}) or {}
                 try:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
@@ -161,10 +172,52 @@ class LLMClient:
                     args = {}
                 calls.append({
                     "id": getattr(item, "call_id", None),
+                    "type": "function_call",
                     "name": item.name,
                     "args": args
                 })
+
+            # Handle web search calls
+            elif item_type == "web_search_call":
+                action = getattr(item, "action", {})
+                calls.append({
+                    "id": getattr(item, "id", None),
+                    "type": "web_search_call",
+                    "name": "web_search",
+                    "args": {
+                        "query": action.get("query", ""),
+                        "sources": action.get("sources")
+                    }
+                })
+
         return calls
+
+    def _extract_web_search_results(self, response, call_id: str) -> List[Dict]:
+        """
+        Extract web search results from the response for a specific call_id.
+        Returns a list of search result dictionaries.
+        """
+        results = []
+        output = getattr(response, "output", []) or []
+
+        for item in output:
+            item_type = getattr(item, "type", None)
+            item_id = getattr(item, "id", None)
+
+            # Look for web search results that correspond to our call
+            if (item_type == "web_search_call" and item_id == call_id and
+                getattr(item, "status", None) == "completed"):
+
+                # Extract search results if available
+                # The results might be in a subsequent response or in the item itself
+                # For now, we'll return basic info about the completed search
+                results.append({
+                    "query": getattr(item, "action", {}).get("query", ""),
+                    "status": "completed",
+                    "call_id": call_id
+                })
+
+        return results
 
 
     async def tool_fetch_product_details(self, code: str) -> dict:
@@ -338,7 +391,25 @@ class LLMClient:
                                 "args": args,
                                 "result": result
                             })
-                        # web_search is handled directly by OpenAI, no custom handler needed
+                        elif function_name == "web_search":
+                            # For web search, we need to extract results from the response
+                            # The search results should be available in subsequent response items
+                            search_results = self._extract_web_search_results(response, call_id)
+                            result = {
+                                "ok": True,
+                                "search_query": args.get("query", ""),
+                                "results": search_results,
+                                "results_count": len(search_results) if search_results else 0
+                            }
+                            tool_outputs.append({
+                                "tool_call_id": call_id,
+                                "output": result
+                            })
+                            function_call_history.append({
+                                "function": function_name,
+                                "args": args,
+                                "result": result
+                            })
                         else:
                             logger.warning(f"[OpenAI] Unknown function: {function_name}")
                             error_result = {"ok": False, "error": f"Unknown function: {function_name}"}
