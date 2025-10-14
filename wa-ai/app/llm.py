@@ -407,23 +407,13 @@ class LLMClient:
                                 "result": result
                             })
                         elif function_name == "web_search":
-                            # For web search, we need to extract results from the response
-                            # The search results should be available in subsequent response items
-                            search_results = self._extract_web_search_results(response, call_id)
-                            result = {
-                                "ok": True,
-                                "search_query": args.get("query", ""),
-                                "results": search_results,
-                                "results_count": len(search_results) if search_results else 0
-                            }
-                            tool_outputs.append({
-                                "tool_call_id": call_id,
-                                "output": result
-                            })
+                            # Web search is handled internally by OpenAI - no custom output needed
+                            # Just log the search execution for tracking
+                            logger.info(f"[OpenAI] Web search executed: {args.get('query', 'No query')}")
                             function_call_history.append({
                                 "function": function_name,
                                 "args": args,
-                                "result": result
+                                "result": {"ok": True, "note": "Web search handled internally by OpenAI"}
                             })
                         else:
                             logger.warning(f"[OpenAI] Unknown function: {function_name}")
@@ -439,10 +429,12 @@ class LLMClient:
                             })
 
                     # Step 4: Make follow-up API call with function results using Responses API
-                    if tool_outputs:
+                    # Only make follow-up call if we have actual function call outputs (not web search)
+                    function_outputs = [output for output in tool_outputs if output["output"].get("ok") is not None]
+                    if function_outputs:
                         logger.info("[OpenAI] Making follow-up API call with function results")
-                        logger.info(f"[DEBUG] Tool outputs count: {len(tool_outputs)}")
-                        logger.info(f"[DEBUG] Tool outputs structure: {json.dumps([{'id': to['tool_call_id'], 'ok': to['output'].get('ok')} for to in tool_outputs], indent=2)}")
+                        logger.info(f"[DEBUG] Function outputs count: {len(function_outputs)}")
+                        logger.info(f"[DEBUG] Function outputs structure: {json.dumps([{'id': fo['tool_call_id'], 'ok': fo['output'].get('ok')} for fo in function_outputs], indent=2)}")
 
                         # Build input with function call outputs
                         follow_up_input = [
@@ -459,8 +451,8 @@ class LLMClient:
                             {"role": "user", "content": user_prompt},
                         ]
 
-                        # Add function call outputs to input
-                        for tool_output in tool_outputs:
+                        # Add function call outputs to input (web search is handled internally)
+                        for tool_output in function_outputs:
                             follow_up_input.append({
                                 "type": "function_call_output",
                                 "call_id": tool_output["tool_call_id"],
