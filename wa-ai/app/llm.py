@@ -352,7 +352,8 @@ class LLMClient:
                                 "Ești asistent Romstal pe WhatsApp. "
                                 "Dacă utilizatorul furnizează clar un cod de produs (ex: 64px9822), "
                                 "apelează funcția `fetch_product_details`. "
-                                "Dacă cere recomandări de produse sau ce să cumpere într-un anumit scenariu, apeleaza funcția `web_search`. "
+                                "Dacă cere recomandări de produse sau ce să cumpere într-un anumit scenariu, apeleaza funcția `web_search`.  "
+                                "După orice căutare, sintetizează un răspuns final concis pentru utilizator. Arată cele mai relevante linkuri. "
                                 "Nu modifica URL-urile sau alte date. "
                                 "Răspunde prietenos, în română.\n\n"
                                 + system_prompt
