@@ -273,7 +273,10 @@ class LLMClient:
                 has_web_search = any(tool.get("type") == "web_search" for tool in self.OPENAI_TOOLS)
 
                 # Use different reasoning effort based on tools
-                reasoning_effort = "low" if has_web_search else "minimal"
+                reasoning_effort = "medium" if has_web_search else "minimal"
+
+                if has_web_search:
+                    logger.info(f"[OpenAI] [{correlation_id}] Web search tool available, using medium reasoning effort")
 
                 response = self.client.responses.create(
                     model=settings.openai_model,
@@ -284,7 +287,7 @@ class LLMClient:
                                 "Ești asistent Romstal pe WhatsApp. "
                                 "Dacă utilizatorul furnizează clar un cod de produs (ex: 64px9822), "
                                 "apelează funcția `fetch_product_details`. "
-                                "Dacă nu există cod, cere politicos codul. "
+                                "Dacă cere recomandări de produse sau ce să cumpere într-un anumit scenariu, apeleaza funcția `web_search`. "
                                 "Nu modifica URL-urile sau alte date. "
                                 "Răspunde prietenos, în română.\n\n"
                                 + system_prompt
@@ -395,7 +398,10 @@ class LLMClient:
                         logger.info(f"[DEBUG] Using previous_response_id: {response.id}")
 
                         # Use appropriate reasoning effort for follow-up call too
-                        follow_up_reasoning_effort = "low" if has_web_search else "minimal"
+                        follow_up_reasoning_effort = "medium" if has_web_search else "minimal"
+
+                        if has_web_search:
+                            logger.info(f"[OpenAI] [{correlation_id}] Web search tool available for follow-up call")
 
                         follow_up_response = self.client.responses.create(
                             model=settings.openai_model,
@@ -421,6 +427,8 @@ class LLMClient:
                 else:
                     # No function calls, return the direct response
                     logger.info("[OpenAI] No function calls found, returning direct response")
+                    if has_web_search:
+                        logger.info(f"[OpenAI] [{correlation_id}] Direct response suggests web_search may have been used internally by OpenAI")
                     logger.info(f"[DEBUG] Direct response output_text present: {hasattr(response, 'output_text') and response.output_text is not None}")
                     final_text = response.output_text
                     logger.info(f"[DEBUG] output_text value: '{final_text}' (type: {type(final_text)}, len: {len(final_text) if final_text else 'N/A'})")
