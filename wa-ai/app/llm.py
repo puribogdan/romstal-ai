@@ -51,7 +51,7 @@ class LLMClient:
             "type": "web_search",
             # Built-in tool: do NOT add name/description/parameters here.
             "user_location": {"type": "approximate", "country": "RO", "city": "București"},
-            "filters": {"include_domains": ["romstal.ro"]}
+            "filters": {"allowed_domains": ["romstal.ro"]}
         }
     ]
 
