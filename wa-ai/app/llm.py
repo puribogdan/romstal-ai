@@ -179,14 +179,22 @@ class LLMClient:
 
             # Handle web search calls
             elif item_type == "web_search_call":
-                action = getattr(item, "action", {})
+                action = getattr(item, "action", None)
+                if action:
+                    # Handle ActionSearch object attributes
+                    query = getattr(action, "query", "")
+                    sources = getattr(action, "sources", None)
+                else:
+                    query = ""
+                    sources = None
+
                 calls.append({
                     "id": getattr(item, "id", None),
                     "type": "web_search_call",
                     "name": "web_search",
                     "args": {
-                        "query": action.get("query", ""),
-                        "sources": action.get("sources")
+                        "query": query,
+                        "sources": sources
                     }
                 })
 
@@ -211,8 +219,15 @@ class LLMClient:
                 # Extract search results if available
                 # The results might be in a subsequent response or in the item itself
                 # For now, we'll return basic info about the completed search
+                action = getattr(item, "action", None)
+                if action:
+                    # Handle ActionSearch object attributes
+                    query = getattr(action, "query", "")
+                else:
+                    query = ""
+
                 results.append({
-                    "query": getattr(item, "action", {}).get("query", ""),
+                    "query": query,
                     "status": "completed",
                     "call_id": call_id
                 })

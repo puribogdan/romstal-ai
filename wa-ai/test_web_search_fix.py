@@ -24,21 +24,23 @@ def create_mock_response_with_web_search():
     mock_item1 = Mock()
     mock_item1.type = "web_search_call"
     mock_item1.id = "ws_042c9e883ff126940068ee81981190819da9cb25e7a23a4472"
-    mock_item1.action = {
-        "query": "site:romstal.ro centrale termice pe gaz condensare 24 kW",
-        "type": "search",
-        "sources": None
-    }
+    # Create a mock ActionSearch object
+    mock_action1 = Mock()
+    mock_action1.query = "site:romstal.ro centrale termice pe gaz condensare 24 kW"
+    mock_action1.type = "search"
+    mock_action1.sources = None
+    mock_item1.action = mock_action1
     mock_item1.status = "completed"
 
     mock_item2 = Mock()
     mock_item2.type = "web_search_call"
     mock_item2.id = "ws_042c9e883ff126940068ee819d5f94819db1e447a59422824d"
-    mock_item2.action = {
-        "query": "site:romstal.ro/ produse centrala termica condensare gaz 24 kW",
-        "type": "search",
-        "sources": None
-    }
+    # Create a mock ActionSearch object for the second item
+    mock_action2 = Mock()
+    mock_action2.query = "site:romstal.ro/ produse centrala termica condensare gaz 24 kW"
+    mock_action2.type = "search"
+    mock_action2.sources = None
+    mock_item2.action = mock_action2
     mock_item2.status = "completed"
 
     # Add a text response item
