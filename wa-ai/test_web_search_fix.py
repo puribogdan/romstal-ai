@@ -157,6 +157,29 @@ def test_text_extraction_with_web_search():
         return False
 
 
+def test_built_in_tools_response_handling():
+    """Test that responses with only web search calls extract text from current response."""
+    print("\nTesting Built-in Tools Response Handling")
+    print("=" * 40)
+
+    client = LLMClient()
+
+    # Create mock response with only web search calls (no function calls)
+    mock_response = create_mock_response_with_web_search()
+    # Ensure output_text is empty to simulate built-in tool scenario
+    mock_response.output_text = ""
+
+    # Test that text is extracted from current response (not requiring follow-up call)
+    extracted_text = client._extract_text_from_responses(mock_response)
+
+    if extracted_text and "centrale termice" in extracted_text.lower():
+        print("PASS: Text correctly extracted from response with only web search calls")
+        return True
+    else:
+        print("FAIL: Could not extract text from web search only response")
+        return False
+
+
 def test_web_search_processing():
     """Test that web search calls are properly processed."""
     print("\nTesting Web Search Processing")
@@ -211,13 +234,14 @@ def main():
         # Run synchronous tests
         test1_pass = test_web_search_extraction()
         test2_pass = test_text_extraction_with_web_search()
-        test3_pass = test_web_search_processing()
+        test3_pass = test_built_in_tools_response_handling()
+        test4_pass = test_web_search_processing()
 
         # Run async test
         async_test_pass = asyncio.run(test_full_web_search_integration())
 
         # Summary
-        all_passed = all([test1_pass, test2_pass, test3_pass, async_test_pass])
+        all_passed = all([test1_pass, test2_pass, test3_pass, test4_pass, async_test_pass])
 
         print("\n" + "=" * 50)
         if all_passed:

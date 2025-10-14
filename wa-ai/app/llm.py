@@ -107,26 +107,18 @@ class LLMClient:
         if isinstance(items, list):
             # Collect all message texts in order
             all_texts = []
-            print(f"[DEBUG] Processing {len(items)} output items for text extraction")
 
-            for i, item in enumerate(items):
+            for item in items:
                 item_type = getattr(item, "type", None)
 
                 # Handle message items (main response content)
                 if item_type in ["message", "text"]:
-                    print(f"[DEBUG] Processing {item_type} item {i}")
                     content = getattr(item, "content", None)
                     if isinstance(content, list):
                         for c in content:
                             t = getattr(c, "text", None)
-                            if t:
-                                safe_t = t[:50] + "..." if len(t) > 50 else t
-                                print(f"[DEBUG]   Found text: '{safe_t}'")
-                            else:
-                                print(f"[DEBUG]   Found text: None")
                             if isinstance(t, str) and t.strip():
                                 all_texts.append(t.strip())
-                                print(f"[DEBUG]   Added to all_texts, count now: {len(all_texts)}")
 
                 # Skip reasoning items entirely
                 elif item_type in ["reasoning"]:
@@ -150,10 +142,7 @@ class LLMClient:
 
             # Return concatenated texts if any found
             if all_texts:
-                result = " ".join(all_texts).strip()
-                print(f"[DEBUG] Final concatenated text length: {len(result)}")
-                print(f"[DEBUG] Final concatenated text preview: '{result[:100]}...'")
-                return result
+                return " ".join(all_texts).strip()
 
         # 3) fallback: caută „text” oriunde
         try:
@@ -382,7 +371,9 @@ class LLMClient:
                                 "Dacă utilizatorul furnizează clar un cod de produs (ex: 64px9822), "
                                 "apelează funcția `fetch_product_details`. "
                                 "Dacă cere recomandări de produse sau ce să cumpere într-un anumit scenariu, apeleaza funcția `web_search`.  "
-                                "După orice căutare, sintetizează un răspuns final concis pentru utilizator. Arată cele mai relevante linkuri. "
+                                "După orice căutare, sintetizează un răspuns final concis pentru utilizator, "
+                                "chiar dacă nu găsești rezultate, explică ce ai verificat și ce informații îți lipsesc. "
+                                "Arată cele mai relevante linkuri. "
                                 "Nu modifica URL-urile sau alte date. "
                                 "Răspunde prietenos, în română.\n\n"
                                 + system_prompt
@@ -403,6 +394,9 @@ class LLMClient:
                 tool_calls = self._extract_tool_calls_from_response(response)
                 logger.info(f"[DEBUG] Extracted tool calls: {len(tool_calls)}")
 
+                # Initialize function_call_history for both branches
+                function_call_history = []
+
                 if tool_calls:
                     logger.info(f"[OpenAI] Found {len(tool_calls)} function call(s), executing...")
                     logger.info(f"[DEBUG] Tool calls details: {json.dumps([{'name': tc['name'], 'id': tc['id']} for tc in tool_calls], indent=2)}")
@@ -410,6 +404,8 @@ class LLMClient:
                     # Step 3: Execute function calls
                     tool_outputs = []
                     function_call_history = []  # Track function calls and results
+
+                    # Initialize function_call_history here so it's available in both branches
 
                     for call in tool_calls:
                         function_name = call["name"]
@@ -458,10 +454,12 @@ class LLMClient:
                                 "result": error_result
                             })
 
-                    # Step 4: Make follow-up API call with function results using Responses API
-                    # Only make follow-up call if we have actual function call outputs (not web search)
+                    # Step 4: Handle response based on tool call types
+                    # Separate function outputs from web search (built-in tools)
                     function_outputs = [output for output in tool_outputs if output["output"].get("ok") is not None]
+
                     if function_outputs:
+                        # Custom function calls need follow-up API call
                         logger.info("[OpenAI] Making follow-up API call with function results")
                         logger.info(f"[DEBUG] Function outputs count: {len(function_outputs)}")
                         logger.info(f"[DEBUG] Function outputs structure: {json.dumps([{'id': fo['tool_call_id'], 'ok': fo['output'].get('ok')} for fo in function_outputs], indent=2)}")
@@ -517,7 +515,38 @@ class LLMClient:
                             return final_text.strip(), function_call_history
                         else:
                             logger.error("[DEBUG] ===== Follow-up response has NO output_text! =====")
+                            # Try alternative extraction from follow-up response
+                            alt_text = self._extract_text_from_responses(follow_up_response)
+                            if alt_text:
+                                logger.info(f"[DEBUG] Alternative extraction succeeded, length: {len(alt_text)}")
+                                return alt_text, function_call_history
                             logger.error(f"[DEBUG] Follow-up response dump: {follow_up_response.model_dump()}")
+
+                    else:
+                        # ✅ NEW: When only built-in tools (e.g., web_search) were used,
+                        # try to read the final text from THIS response.
+                        logger.info("[DEBUG] Built-in tools used only; extracting text from initial response")
+
+                        # Try output_text first
+                        final_text = getattr(response, "output_text", None)
+                        if final_text and final_text.strip():
+                            logger.info("[DEBUG] Built-in tools used; returning output_text from initial response")
+                            return final_text.strip(), function_call_history
+
+                        # Fallback to message content extraction
+                        alt_text = self._extract_text_from_responses(response)
+                        if alt_text:
+                            logger.info("[DEBUG] Built-in tools used; returning extracted text from initial response")
+                            return alt_text, function_call_history
+
+                        # If still nothing, log dump and return a polite message
+                        try:
+                            response_dump = response.model_dump()
+                            logger.error(f"[DEBUG] No text after built-in tools. Dump (first 2000): {json.dumps(response_dump, ensure_ascii=False)[:2000]}")
+                        except Exception as e:
+                            logger.error(f"[DEBUG] Could not dump response: {e}")
+
+                        return "Îmi pare rău, momentan nu pot procesa cererea. Te rog să încerci din nou mai târziu.", function_call_history
 
                 else:
                     # No function calls, return the direct response
@@ -534,7 +563,7 @@ class LLMClient:
                         return final_text.strip(), None
                     else:
                         logger.error(f"[DEBUG] output_text is empty or whitespace-only")
-                        # Try alternative extraction
+                        # Try alternative extraction from message items
                         alt_text = self._extract_text_from_responses(response)
                         if alt_text:
                             logger.info(f"[DEBUG] Alternative extraction succeeded, length: {len(alt_text)}")
