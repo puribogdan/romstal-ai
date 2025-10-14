@@ -604,6 +604,7 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
             "- Poți face follow-up doar despre produsul sau subiectul discutat (ex: recomandări similare, specificații, întreținere, garanție etc.).\n"
             "- Menține un ton profesionist, empatic și prietenos, ca un consultant Romstal care vorbește relaxat, dar informat.\n"
             "- Nu poti verifica termenul de livrare al unui produs\n"
+            "- Nu face follow-up questions pentru a oferi servicii sau a iniția alte conversații.\n"
         )
 
         # Update session with correct system prompt if it was created empty
