@@ -6,7 +6,6 @@ import time
 import re
 from typing import Optional, List, Dict, Any, Tuple
 from openai import OpenAI
-from bs4 import BeautifulSoup
 from .settings import settings
 from .correlation import generate_correlation_id, get_correlation_id, set_correlation_id, CorrelationContext
 
@@ -31,20 +30,28 @@ class LLMClient:
         {
             "type": "function",
             "name": "fetch_product_details",
-            "description": "Ia detalii de produs Romstal când utilizatorul furnizează un cod de produs (ex:64px9822). Apelează DOAR dacă mesajul conține clar un cod.",
+            "description": "Ia detalii de produs Romstal când utilizatorul furnizează un cod de produs (ex: 64px9822). Apelează DOAR dacă mesajul conține clar un cod.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": "Codul produsului cerut de utilizator."
-                    }
+                    "code": {"type": "string", "description": "Codul produsului cerut de utilizator."}
                 },
                 "required": ["code"]
             }
         },
         {
-            "type": "web_search"
+            "type": "web_search",
+            "web_search": {
+                # Only search romstal.ro (subdomains included)
+                "filters": { "allowed_domains": ["romstal.ro"] },
+
+                # Optional: nudge localization (non-sensitive)
+                "user_location": {
+                    "type": "approximate",
+                    "country": "RO",
+                    "city": "București"
+                }
+            }
         }
     ]
 
@@ -138,87 +145,30 @@ class LLMClient:
 
     def _extract_tool_calls_from_response(self, resp):
         """
-        Returnează o listă de dicturi:
-          {"id": <tool_call_id>, "name": <tool_name>, "args": <dict>}
-        Suportă atât stilul 'function_call' (cu call_id) cât și 'tool_use'.
+        Extracts all function calls emitted by the Responses API.
+        Returns a list of dicts like:
+          {"id": <call_id>, "name": <function_name>, "args": <dict>}
         """
         calls = []
         output = getattr(resp, "output", []) or []
 
         for item in output:
-            typ = getattr(item, "type", None)
-            contents = getattr(item, "content", None)
-
-            # Stil 'function_call' (cel mai frecvent în Responses acum)
-            if typ == "function_call" and getattr(item, "name", None):
-                raw_args = getattr(item, "arguments", None)
+            if getattr(item, "type", None) == "function_call" and getattr(item, "name", None):
+                raw_args = getattr(item, "arguments", {}) or {}
                 try:
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 except Exception:
                     args = {}
                 calls.append({
                     "id": getattr(item, "call_id", None),
-                    "name": getattr(item, "name", None),
+                    "name": item.name,
                     "args": args
                 })
-
-            # Stil 'tool_use' (fallback)
-            if isinstance(contents, list):
-                for c in contents:
-                    if getattr(c, "type", None) == "tool_use" and getattr(c, "name", None):
-                        calls.append({
-                            "id": getattr(c, "id", None),   # tool_use_id
-                            "name": getattr(c, "name", None),
-                            "args": getattr(c, "input", {}) or {}
-                        })
         return calls
 
-    def extract_relevant_product_data(self, raw: dict) -> dict:
-        """Extrage doar câmpurile esențiale din JSON-ul API Romstal."""
-        result = {}
-
-        # 1) info (core product)
-        info = raw.get("info", {}) or {}
-        result["info"] = {k: info.get(k) for k in [
-            "productid", "masterid", "code", "barcode", "product", "subtitle",
-            "master_product", "description", "brand", "brandid", "category",
-            "categoryid", "categoryurl", "url", "price", "oldprice", "currencyid",
-            "vat", "emag_price", "ispromo", "promo", "promo_from", "promo_to",
-            "warranty", "stock", "stockno", "stockid", "isvariant",
-            "variants_count", "modified_on"
-        ] if k in info}
-
-        # 2) rating
-        rating = raw.get("rating", {}) or {}
-        result["rating"] = {
-            "rating": rating.get("rating"),
-            "noreview": rating.get("noreview")
-        }
-
-        # 3) related.1.products (esențiale)
-        related = raw.get("related", {}) or {}
-        related_1 = related.get("1", {}) or {}
-        products = related_1.get("products", []) or []
-        essentials = []
-        for p in products:
-            essentials.append({k: p.get(k) for k in [
-                "productid", "code", "product", "brand",
-                "price", "stock", "url", "categoryid", "params"
-            ] if k in p})
-        result["related_products"] = essentials
-
-        return result
-
-    def remove_none_fields(self, obj):
-        """Curăță None / "" / [] din structura rezultată (opțional dar recomandat)."""
-        if isinstance(obj, dict):
-            return {k: self.remove_none_fields(v) for k, v in obj.items() if v not in [None, "", []]}
-        if isinstance(obj, list):
-            return [self.remove_none_fields(v) for v in obj if v not in [None, "", []]]
-        return obj
 
     async def tool_fetch_product_details(self, code: str) -> dict:
-        """Handler pentru OpenAI tool - cheamă API-ul Romstal și filtrează răspunsul."""
+        """Handler pentru OpenAI tool - cheamă API-ul Romstal și returnează răspunsul complet."""
         import httpx
 
         url = f"https://www.romstalpartener.ro/cs-includes/evolio/product.php?code={code}"
@@ -228,9 +178,6 @@ class LLMClient:
                 r.raise_for_status()
                 data = r.json()  # API-ul tău returnează JSON
 
-            # Temporarily commented out filtering to return all data
-            # clean = self.extract_relevant_product_data(data)
-            # clean = self.remove_none_fields(clean)
             return {"ok": True, "code": code, "data": data}
 
         except Exception as e:
@@ -238,217 +185,10 @@ class LLMClient:
             return {"ok": False, "code": code, "error": str(e)}
 
 
-    def _generate_romstal_product_recommendations(self, category: str, budget: Optional[str] = None, requirements: Optional[str] = None, limit: int = 5) -> list:
-        """Generează recomandări de produse Romstal pe baza categoriei."""
-        # Bază de date de produse Romstal simulate (într-o implementare reală, acestea ar veni dintr-o bază de date sau API)
-        romstal_products_db = {
-            'tevi': [
-                {'name': 'Țeavă PPR pentru apă caldă și rece', 'price': '45', 'url': 'https://www.romstal.ro/teava-ppr-20mm', 'description': 'Țeavă din polipropilenă random pentru instalații sanitare'},
-                {'name': 'Țeavă PVC pentru canalizare', 'price': '120', 'url': 'https://www.romstal.ro/teava-pvc-110mm', 'description': 'Țeavă PVC pentru sisteme de canalizare'},
-                {'name': 'Țeavă din cupru pentru instalații', 'price': '280', 'url': 'https://www.romstal.ro/teava-cupru-15mm', 'description': 'Țeavă din cupru pentru instalații de încălzire'},
-                {'name': 'Țeavă multicu pentru apă', 'price': '85', 'url': 'https://www.romstal.ro/teava-multistrat-16mm', 'description': 'Țeavă multistrat pentru apă potabilă'},
-                {'name': 'Țeavă PEX pentru încălzire în pardoseală', 'price': '65', 'url': 'https://www.romstal.ro/teava-pex-16mm', 'description': 'Țeavă PEX pentru sisteme de încălzire'},
-            ],
-            'pompe': [
-                {'name': 'Pompă submersibilă pentru puțuri', 'price': '450', 'url': 'https://www.romstal.ro/pompa-submersibila-750w', 'description': 'Pompă submersibilă pentru puțuri adânci'},
-                {'name': 'Pompă de suprafață pentru irigații', 'price': '320', 'url': 'https://www.romstal.ro/pompa-suprafata-550w', 'description': 'Pompă de suprafață pentru sisteme de irigații'},
-                {'name': 'Pompă circulatie pentru încălzire', 'price': '180', 'url': 'https://www.romstal.ro/pompa-circulatie-25-60', 'description': 'Pompă de circulație pentru centrale termice'},
-                {'name': 'Hidrofor complet cu pompă', 'price': '890', 'url': 'https://www.romstal.ro/hidrofor-50l-750w', 'description': 'Hidrofor complet cu rezervor și pompă'},
-                {'name': 'Pompă de drenaj pentru apă murdară', 'price': '275', 'url': 'https://www.romstal.ro/pompa-drenaj-400w', 'description': 'Pompă submersibilă pentru apă murdară'},
-            ],
-            'boilere': [
-                {'name': 'Boiler electric 80L vertical', 'price': '650', 'url': 'https://www.romstal.ro/boiler-electric-80l', 'description': 'Boiler electric cu capacitate 80 litri'},
-                {'name': 'Boiler electric 100L orizontal', 'price': '720', 'url': 'https://www.romstal.ro/boiler-electric-100l', 'description': 'Boiler electric cu montare orizontală'},
-                {'name': 'Boiler electric 50L cu afișaj digital', 'price': '480', 'url': 'https://www.romstal.ro/boiler-electric-50l-digital', 'description': 'Boiler electric compact cu control digital'},
-                {'name': 'Boiler electric 120L cu anod de magneziu', 'price': '890', 'url': 'https://www.romstal.ro/boiler-electric-120l', 'description': 'Boiler electric cu protecție anticorozivă'},
-                {'name': 'Boiler electric 30L pentru chiuvetă', 'price': '290', 'url': 'https://www.romstal.ro/boiler-electric-30l', 'description': 'Boiler electric mic pentru chiuvete'},
-            ],
-            'radiatoare': [
-                {'name': 'Radiator aluminiu 600x800mm', 'price': '185', 'url': 'https://www.romstal.ro/radiator-aluminiu-10-elemente', 'description': 'Radiator din aluminiu cu 10 elementi'},
-                {'name': 'Radiator oțel 600x1000mm', 'price': '220', 'url': 'https://www.romstal.ro/radiator-otel-22-elemente', 'description': 'Radiator din oțel pentru încălzire centrală'},
-                {'name': 'Radiator baie cromat 500x800mm', 'price': '340', 'url': 'https://www.romstal.ro/radiator-baie-cromat', 'description': 'Radiator special pentru baie cu finisaj cromat'},
-                {'name': 'Radiator fontă 800x600mm', 'price': '420', 'url': 'https://www.romstal.ro/radiator-fonta-8-elemente', 'description': 'Radiator tradițional din fontă'},
-                {'name': 'Radiator electric cu termostat', 'price': '380', 'url': 'https://www.romstal.ro/radiator-electric-1500w', 'description': 'Radiator electric cu control termostat'},
-            ],
-            'fitinguri': [
-                {'name': 'Fiting PPR cot 90 grade 20mm', 'price': '8', 'url': 'https://www.romstal.ro/fiting-ppr-cot-90-20mm', 'description': 'Cot PPR 90 grade pentru țevi 20mm'},
-                {'name': 'Fiting PPR mufă 25mm', 'price': '12', 'url': 'https://www.romstal.ro/fiting-ppr-mufa-25mm', 'description': 'Mufă PPR pentru îmbinarea țevilor'},
-                {'name': 'Fiting compresie pentru multicu 16mm', 'price': '15', 'url': 'https://www.romstal.ro/fiting-compresie-16mm', 'description': 'Fiting de compresie pentru țevi multistrat'},
-                {'name': 'Fiting PPR tee 20mm', 'price': '18', 'url': 'https://www.romstal.ro/fiting-ppr-tee-20mm', 'description': 'Fiting tee PPR pentru ramificații'},
-                {'name': 'Fiting PPR capăt 20mm', 'price': '6', 'url': 'https://www.romstal.ro/fiting-ppr-capat-20mm', 'description': 'Capăt PPR pentru închiderea țevilor'},
-            ]
-        }
 
-        # Normalizează categoria pentru căutare
-        category_lower = category.lower().strip()
 
-        # Găsește produsele relevante pentru categoria dată
-        matching_products = []
 
-        for cat_key, products_list in romstal_products_db.items():
-            if cat_key in category_lower or category_lower in cat_key:
-                matching_products.extend(products_list)
 
-        # Dacă nu găsim potriviri exacte, căutăm după cuvinte cheie
-        if not matching_products:
-            keywords = category_lower.split()
-            for cat_key, products_list in romstal_products_db.items():
-                for product in products_list:
-                    product_text = f"{product['name']} {product['description']}".lower()
-                    if any(keyword in product_text for keyword in keywords):
-                        if product not in matching_products:
-                            matching_products.append(product)
-
-        # Dacă încă nu avem produse, returnăm o selecție generală
-        if not matching_products:
-            # Ia primele produse din fiecare categorie pentru diversitate
-            for products_list in romstal_products_db.values():
-                matching_products.extend(products_list[:2])  # 2 produse din fiecare categorie
-
-        return matching_products
-
-    def _extract_product_from_card(self, card, base_url: str) -> Optional[dict]:
-        """Extrage informații despre produs dintr-un card HTML."""
-        try:
-            # Încearcă să găsească numele produsului
-            name_element = card.find(['h1', 'h2', 'h3', 'h4', '.title', '.name', '.product-title'])
-            name = name_element.get_text(strip=True) if name_element else ""
-
-            # Încearcă să găsească URL-ul produsului
-            link_element = card.find('a', href=True)
-            url = ""
-            if link_element:
-                href = link_element.get('href', '')
-                url = f"{base_url}{href}" if href.startswith('/') else href
-
-            # Încearcă să găsească prețul
-            price_element = card.find(['.price', '.cost', '.amount', '[data-price]'])
-            price = ""
-            if price_element:
-                price_text = price_element.get_text(strip=True)
-                # Extrage doar numerele și moneda
-                price_match = re.search(r'(\d+[.,]\d+|\d+)', price_text)
-                price = price_match.group(1) if price_match else price_text
-
-            # Încearcă să găsească imaginea
-            img_element = card.find('img')
-            image = img_element.get('src', '') if img_element else ""
-
-            # Încearcă să găsească descrierea
-            desc_element = card.find(['.description', '.summary', 'p'])
-            description = desc_element.get_text(strip=True) if desc_element else ""
-
-            # Numai dacă avem nume și URL, considerăm că e un produs valid
-            if name and url:
-                return {
-                    'name': name,
-                    'url': url,
-                    'price': price,
-                    'image': f"{base_url}{image}" if image.startswith('/') else image,
-                    'description': description[:200] + '...' if len(description) > 200 else description,
-                    'source': 'product_card'
-                }
-
-        except Exception as e:
-            logger.warning(f"[tool_search_products_romstal] Error in _extract_product_from_card: {e}")
-
-        return None
-
-    def _filter_products_by_budget(self, products: list, budget: str) -> list:
-        """Filtrează produsele după buget."""
-        if not budget or not products:
-            return products
-
-        filtered_products = []
-
-        # Normalizează bugetul pentru comparație
-        budget_lower = budget.lower()
-        budget_range = {'min': 0, 'max': float('inf')}
-
-        if 'sub' in budget_lower or 'mai puțin' in budget_lower:
-            if '500' in budget_lower:
-                budget_range['max'] = 500
-            elif '1000' in budget_lower:
-                budget_range['max'] = 1000
-            elif '2000' in budget_lower:
-                budget_range['max'] = 2000
-        elif 'peste' in budget_lower or 'mai mult' in budget_lower:
-            if '1000' in budget_lower:
-                budget_range['min'] = 1000
-            elif '2000' in budget_lower:
-                budget_range['min'] = 2000
-        elif '-' in budget_lower:
-            # Parsează range-ul (ex: "500-1000 lei")
-            range_match = re.search(r'(\d+)[^\d]*(\d+)', budget_lower)
-            if range_match:
-                budget_range['min'] = int(range_match.group(1))
-                budget_range['max'] = int(range_match.group(2))
-
-        # Filtrează produsele după preț
-        for product in products:
-            try:
-                price_str = str(product.get('price', ''))
-                price_match = re.search(r'(\d+[.,]\d+|\d+)', price_str)
-                if price_match:
-                    price = float(price_match.group(1).replace('.', '').replace(',', '.'))
-                    if budget_range['min'] <= price <= budget_range['max']:
-                        filtered_products.append(product)
-            except (ValueError, AttributeError):
-                # Dacă nu putem parsa prețul, includem produsul
-                filtered_products.append(product)
-
-        return filtered_products if filtered_products else products
-
-    def _filter_products_by_requirements(self, products: list, requirements: str) -> list:
-        """Filtrează produsele după cerințe specifice."""
-        if not requirements or not products:
-            return products
-
-        filtered_products = []
-        requirements_lower = requirements.lower()
-
-        for product in products:
-            try:
-                # Verifică dacă cerințele se potrivesc cu numele, descrierea sau categoria produsului
-                name = str(product.get('name', '')).lower()
-                description = str(product.get('description', '')).lower()
-                category = str(product.get('category', '')).lower()
-
-                text_to_search = f"{name} {description} {category}"
-
-                # Verifică cuvinte cheie comune
-                keywords = requirements_lower.split()
-                matches = sum(1 for keyword in keywords if keyword in text_to_search)
-
-                # Dacă cel puțin jumătate din cuvintele cheie se potrivesc, includem produsul
-                if matches >= len(keywords) / 2:
-                    filtered_products.append(product)
-
-            except (AttributeError, TypeError):
-                # Dacă nu putem procesa produsul, îl includem
-                filtered_products.append(product)
-
-        return filtered_products if filtered_products else products
-
-    def _generate_related_products_section(self, products: list) -> str:
-        """Generează o secțiune cu produse similare."""
-        if not products:
-            return "Nu am găsit produse similare în această căutare."
-
-        related_text = "Produse similare găsite:\n"
-        for i, product in enumerate(products[:3], 1):
-            name = product.get('name', 'Produs necunoscut')
-            url = product.get('url', '')
-            price = product.get('price', 'Preț indisponibil')
-
-            related_text += f"{i}. {name}"
-            if price:
-                related_text += f" - {price} lei"
-            if url:
-                related_text += f"\n   Vezi: {url}"
-            related_text += "\n"
-
-        return related_text.strip()
 
     def call_llm(self, system_prompt: str, user_prompt: str) -> str:
         """Simple LLM call without tools."""
@@ -539,11 +279,9 @@ class LLMClient:
                             "role": "system",
                             "content": (
                                 "Ești asistent Romstal pe WhatsApp. "
-                                "Dacă utilizatorul furnizează clar un cod de produs (ex: 64px9822), "
-                                "apelează funcția `fetch_product_details`. "
-                                "Dacă nu există cod, cere politicos codul. "
-                                "Nu modifica URL-urile sau alte date. "
-                                "Răspunde prietenos, în română.\n\n"
+                                "Dacă utilizatorul dă clar un cod de produs (ex: 64px9822), folosește funcția `fetch_product_details`. "
+                                "Dacă NU există un cod, dar cere fișe tehnice, documentație sau informații de pe site, folosește web search (este deja limitat la romstal.ro). "
+                                "Răspunde prietenos și concis, în română. "
                                 + system_prompt
                             )
                         },
@@ -585,39 +323,12 @@ class LLMClient:
                         # Execute the function based on name
                         if function_name == "fetch_product_details":
                             result = await self.tool_fetch_product_details(args.get("code", ""))
-                            tool_outputs.append({
-                                "tool_call_id": call_id,
-                                "output": result
-                            })
-                            # Store the function call history
-                            function_call_history.append({
-                                "function": function_name,
-                                "args": args,
-                                "result": result
-                            })
-                        # web_search is handled directly by OpenAI, no custom handler needed
-                            tool_outputs.append({
-                                "tool_call_id": call_id,
-                                "output": result
-                            })
-                            # Store the function call history
-                            function_call_history.append({
-                                "function": function_name,
-                                "args": args,
-                                "result": result
-                            })
                         else:
                             logger.warning(f"[OpenAI] Unknown function: {function_name}")
-                            error_result = {"ok": False, "error": f"Unknown function: {function_name}"}
-                            tool_outputs.append({
-                                "tool_call_id": call_id,
-                                "output": error_result
-                            })
-                            function_call_history.append({
-                                "function": function_name,
-                                "args": args,
-                                "result": error_result
-                            })
+                            result = {"ok": False, "error": f"Unknown function: {function_name}"}
+
+                        tool_outputs.append({"tool_call_id": call_id, "output": result})
+                        function_call_history.append({"function": function_name, "args": args, "result": result})
 
                     # Step 4: Make follow-up API call with function results using Responses API
                     if tool_outputs:
