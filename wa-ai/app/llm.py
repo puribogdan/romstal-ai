@@ -27,27 +27,36 @@ class LLMClient:
 
     # OpenAI Tool schema (Responses API)
     OPENAI_TOOLS = [
-        {
-            "type": "function",
-            "name": "fetch_product_details",
-            "description": "Ia detalii de produs Romstal când utilizatorul furnizează un cod de produs (ex:64px9822). Apelează DOAR dacă mesajul conține clar un cod.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": "Codul produsului cerut de utilizator."
-                    }
-                },
-                "required": ["code"]
-            }
-        },
-        {
-            "type": "web_search",
-            "filters": {"allowed_domains": ["romstal.ro"]},
-            "user_location": {"type": "approximate", "country": "RO", "city": "București"}
+  {
+    "type": "function",
+    "name": "fetch_product_details",
+    "description": (
+      "Use ONLY when the user provides a clear Romstal product code "
+      "(ex: 64px9822). If the message lacks a code, do NOT call this; "
+      "ask for the code or consider web_search if they want docs/info."
+    ),
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Exact code string provided by the user (no extra text)."
         }
-    ]
+      },
+      "required": ["code"]
+    }
+  },
+  {
+    "type": "web_search",
+    "filters": {"allowed_domains": ["romstal.ro"]},
+    "user_location": {"type": "approximate", "country": "RO", "city": "București"},
+    # Optional guidance for the hosted tool:
+    "description": (
+      "Search when user asks for recommandations of products or what product should he buy in a particular scenario,"
+      "WITHOUT giving a specific product code."
+    )
+  }
+]
 
     def _log_openai_error(self, context: str, error: Exception) -> None:
         """Helper function to log OpenAI errors consistently."""
