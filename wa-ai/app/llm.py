@@ -314,10 +314,11 @@ class LLMClient:
                             "role": "system",
                             "content": (
                                 "Ești asistent Romstal pe WhatsApp. "
-                                "Dacă utilizatorul furnizează clar un cod de produs (ex: CP12345 sau 64px9822), "
+                                "Dacă utilizatorul furnizează clar un cod de produs (ex: 64px9822), "
                                 "apelează funcția `fetch_product_details`. "
                                 "Dacă nu există cod, cere politicos codul. "
-                                "Răspunde scurt, prietenos, în română.\n\n"
+                                "Nu modifica URL-urile sau alte date. "
+                                "Răspunde prietenos, în română.\n\n"
                                 + system_prompt
                             )
                         },
