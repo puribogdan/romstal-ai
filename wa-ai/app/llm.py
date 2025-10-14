@@ -31,7 +31,7 @@ class LLMClient:
         {
             "type": "function",
             "name": "fetch_product_details",
-            "description": "Ia detalii de produs Romstal când utilizatorul furnizează un cod de produs (ex: CP12345, 64px9822). Apelează DOAR dacă mesajul conține clar un cod.",
+            "description": "Ia detalii de produs Romstal când utilizatorul furnizează un cod de produs (ex:64px9822). Apelează DOAR dacă mesajul conține clar un cod.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -44,32 +44,7 @@ class LLMClient:
             }
         },
         {
-            "type": "function",
-            "name": "search_products_romstal",
-            "description": "Caută produse pe romstal.ro după categorie, buget și cerințe. Folosește pentru recomandări de produse cu filtru pe domeniu romstal.ro.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "category": {
-                        "type": "string",
-                        "description": "Categoria produselor (ex: 'țevi', 'fitinguri', 'pompe', 'boilere', 'radiatoare')"
-                    },
-                    "budget": {
-                        "type": "string",
-                        "description": "Bugetul aproximativ (ex: 'sub 500 lei', '500-1000 lei', 'peste 1000 lei')"
-                    },
-                    "requirements": {
-                        "type": "string",
-                        "description": "Cerințe specifice sau caracteristici dorite (ex: 'material plastic', 'presiune ridicată', 'eficient energetic')"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Numărul maxim de rezultate (default: 5, maxim: 10)",
-                        "default": 5
-                    }
-                },
-                "required": ["category"]
-            }
+            "type": "web_search"
         }
     ]
 
@@ -262,62 +237,6 @@ class LLMClient:
             logger.error(f"[tool_fetch_product_details] {e}")
             return {"ok": False, "code": code, "error": str(e)}
 
-    async def tool_search_products_romstal(self, category: Optional[str] = None, budget: Optional[str] = None, requirements: Optional[str] = None, limit: int = 5) -> dict:
-        """Handler pentru OpenAI tool - oferă recomandări de produse Romstal cu filtru pe domeniu."""
-        import json
-
-        try:
-            logger.info(f"[tool_search_products_romstal] Generating product recommendations for category: {category}, budget: {budget}, requirements: {requirements}")
-
-            # Dacă nu avem categorie, returnează un mesaj helpful
-            if not category:
-                return {
-                    "ok": True,
-                    "message": "Pentru recomandări de produse, te rog să specifici categoria dorită (ex: țevii, pompe, boilere, radiatoare, etc.)",
-                    "suggestion": "Încearcă cu: 'țevi pentru instalații sanitare' sau 'pompe sub 500 lei'",
-                    "products": []
-                }
-
-            # Generează recomandări bazate pe categoria specificată
-            products = self._generate_romstal_product_recommendations(category, budget, requirements, limit)
-
-            # Aplică filtre suplimentare dacă sunt specificate
-            if budget:
-                products = self._filter_products_by_budget(products, budget)
-
-            if requirements:
-                products = self._filter_products_by_requirements(products, requirements)
-
-            # Formatează rezultatul
-            result = {
-                "ok": True,
-                "search_params": {
-                    "category": category,
-                    "budget": budget,
-                    "requirements": requirements,
-                    "limit": limit
-                },
-                "products": products[:limit],
-                "total_found": len(products),
-                "related_products": self._generate_related_products_section(products[:3]),
-                "note": "Recomandări generate pe baza catalogului Romstal. Pentru detalii exacte, vizitează romstal.ro"
-            }
-
-            logger.info(f"[tool_search_products_romstal] Generated {len(products)} product recommendations for category: {category}")
-            return result
-
-        except Exception as e:
-            logger.error(f"[tool_search_products_romstal] Error generating recommendations: {e}")
-            return {
-                "ok": False,
-                "error": str(e),
-                "search_params": {
-                    "category": category,
-                    "budget": budget,
-                    "requirements": requirements,
-                    "limit": limit
-                }
-            }
 
     def _generate_romstal_product_recommendations(self, category: str, budget: Optional[str] = None, requirements: Optional[str] = None, limit: int = 5) -> list:
         """Generează recomandări de produse Romstal pe baza categoriei."""
@@ -669,13 +588,7 @@ class LLMClient:
                                 "args": args,
                                 "result": result
                             })
-                        elif function_name == "search_products_romstal":
-                            result = await self.tool_search_products_romstal(
-                                category=args.get("category", ""),
-                                budget=args.get("budget"),
-                                requirements=args.get("requirements"),
-                                limit=args.get("limit", 5)
-                            )
+                        # web_search is handled directly by OpenAI, no custom handler needed
                             tool_outputs.append({
                                 "tool_call_id": call_id,
                                 "output": result
