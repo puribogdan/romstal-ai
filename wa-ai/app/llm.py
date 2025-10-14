@@ -30,28 +30,22 @@ class LLMClient:
         {
             "type": "function",
             "name": "fetch_product_details",
-            "description": "Ia detalii de produs Romstal când utilizatorul furnizează un cod de produs (ex: 64px9822). Apelează DOAR dacă mesajul conține clar un cod.",
+            "description": "Ia detalii de produs Romstal când utilizatorul furnizează un cod de produs (ex:64px9822). Apelează DOAR dacă mesajul conține clar un cod.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "code": {"type": "string", "description": "Codul produsului cerut de utilizator."}
+                    "code": {
+                        "type": "string",
+                        "description": "Codul produsului cerut de utilizator."
+                    }
                 },
                 "required": ["code"]
             }
         },
         {
             "type": "web_search",
-            "web_search": {
-                # Only search romstal.ro (subdomains included)
-                "filters": { "allowed_domains": ["romstal.ro"] },
-
-                # Optional: nudge localization (non-sensitive)
-                "user_location": {
-                    "type": "approximate",
-                    "country": "RO",
-                    "city": "București"
-                }
-            }
+            "filters": {"allowed_domains": ["romstal.ro"]},
+            "user_location": {"type": "approximate", "country": "RO", "city": "București"}
         }
     ]
 
@@ -279,9 +273,11 @@ class LLMClient:
                             "role": "system",
                             "content": (
                                 "Ești asistent Romstal pe WhatsApp. "
-                                "Dacă utilizatorul dă clar un cod de produs (ex: 64px9822), folosește funcția `fetch_product_details`. "
-                                "Dacă NU există un cod, dar cere fișe tehnice, documentație sau informații de pe site, folosește web search (este deja limitat la romstal.ro). "
-                                "Răspunde prietenos și concis, în română. "
+                                "Dacă utilizatorul furnizează clar un cod de produs (ex: 64px9822), "
+                                "apelează funcția `fetch_product_details`. "
+                                "Dacă nu există cod, cere politicos codul. "
+                                "Nu modifica URL-urile sau alte date. "
+                                "Răspunde prietenos, în română.\n\n"
                                 + system_prompt
                             )
                         },
@@ -323,12 +319,39 @@ class LLMClient:
                         # Execute the function based on name
                         if function_name == "fetch_product_details":
                             result = await self.tool_fetch_product_details(args.get("code", ""))
+                            tool_outputs.append({
+                                "tool_call_id": call_id,
+                                "output": result
+                            })
+                            # Store the function call history
+                            function_call_history.append({
+                                "function": function_name,
+                                "args": args,
+                                "result": result
+                            })
+                        # web_search is handled directly by OpenAI, no custom handler needed
+                            tool_outputs.append({
+                                "tool_call_id": call_id,
+                                "output": result
+                            })
+                            # Store the function call history
+                            function_call_history.append({
+                                "function": function_name,
+                                "args": args,
+                                "result": result
+                            })
                         else:
                             logger.warning(f"[OpenAI] Unknown function: {function_name}")
-                            result = {"ok": False, "error": f"Unknown function: {function_name}"}
-
-                        tool_outputs.append({"tool_call_id": call_id, "output": result})
-                        function_call_history.append({"function": function_name, "args": args, "result": result})
+                            error_result = {"ok": False, "error": f"Unknown function: {function_name}"}
+                            tool_outputs.append({
+                                "tool_call_id": call_id,
+                                "output": error_result
+                            })
+                            function_call_history.append({
+                                "function": function_name,
+                                "args": args,
+                                "result": error_result
+                            })
 
                     # Step 4: Make follow-up API call with function results using Responses API
                     if tool_outputs:
