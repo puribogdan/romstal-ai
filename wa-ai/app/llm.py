@@ -525,6 +525,13 @@ class LLMClient:
 
                 # Step 1: Make initial API call using Responses API (GPT-5 style)
                 logger.info("[DEBUG] Making initial API call with tools...")
+
+                # Check if web_search tool is being used
+                has_web_search = any(tool.get("type") == "web_search" for tool in self.OPENAI_TOOLS)
+
+                # Use different reasoning effort based on tools
+                reasoning_effort = "low" if has_web_search else "minimal"
+
                 response = self.client.responses.create(
                     model=settings.openai_model,
                     input=[
@@ -545,7 +552,7 @@ class LLMClient:
                     tools=self.OPENAI_TOOLS,
                     tool_choice="auto",
                     max_output_tokens=2500,  # Increased from 700 to allow for reasoning + response
-                    reasoning={"effort": "minimal"}
+                    reasoning={"effort": reasoning_effort}
                 )
 
                 logger.info(f"[DEBUG] Initial response ID: {response.id}")
@@ -644,13 +651,16 @@ class LLMClient:
                         logger.info(f"[DEBUG] Follow-up input length: {len(follow_up_input)} items")
                         logger.info(f"[DEBUG] Using previous_response_id: {response.id}")
 
+                        # Use appropriate reasoning effort for follow-up call too
+                        follow_up_reasoning_effort = "low" if has_web_search else "minimal"
+
                         follow_up_response = self.client.responses.create(
                             model=settings.openai_model,
                             input=follow_up_input,
                             tools=self.OPENAI_TOOLS,
                             previous_response_id=response.id,  # Thread the conversation
                             max_output_tokens=2500,  # Ensure enough tokens for response after function call
-                            reasoning={"effort": "minimal"}
+                            reasoning={"effort": follow_up_reasoning_effort}
                         )
 
                         logger.info(f"[DEBUG] Follow-up response ID: {follow_up_response.id}")
