@@ -27,47 +27,33 @@ class LLMClient:
 
     # OpenAI Tool schema (Responses API)
     OPENAI_TOOLS = [
-  {
-    "type": "function",
-    "name": "fetch_product_details",
-    "description": (
-      "Use ONLY when the user provides a clear Romstal product code (ex: 64px9822). "
-      "If the message lacks a code, do NOT call this; ask for the code or consider "
-      "romstal_web_search if they want docs/info."
-    ),
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "code": {
-          "type": "string",
-          "description": "Exact code string provided by the user (no extra text)."
+        {
+            "type": "function",
+            "name": "fetch_product_details",
+            "description": (
+                "Use ONLY when the user provides a clear Romstal product code "
+                "(ex: 64px9822). If the message lacks a code, do NOT call this; "
+                "ask for the code or consider web search if they want docs/info."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Exact code string provided by the user (no extra text)."
+                    }
+                },
+                "required": ["code"],
+                "additionalProperties": False
+            }
+        },
+        {
+            "type": "web_search",
+            # Built-in tool: do NOT add name/description/parameters here.
+            "user_location": {"type": "approximate", "country": "RO", "city": "București"},
+            "filters": {"include_domains": ["romstal.ro"]}
         }
-      },
-      "required": ["code"],
-      "additionalProperties": False
-    }
-  },
-  {
-    "type": "function",  # <- use 'function' for full API compatibility
-    "name": "romstal_web_search",
-    "description": (
-      "Search when user asks for recommendations of products or what product they "
-      "should buy in a scenario, WITHOUT giving a specific product code. Restricted "
-      "to romstal.ro domain."
-    ),
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string",
-          "description": "Search query keywords"
-        }
-      },
-      "required": ["query"],
-      "additionalProperties": False
-    }
-  }
-]
+    ]
 
     def _log_openai_error(self, context: str, error: Exception) -> None:
         """Helper function to log OpenAI errors consistently."""
@@ -353,16 +339,6 @@ class LLMClient:
                                 "result": result
                             })
                         # web_search is handled directly by OpenAI, no custom handler needed
-                            tool_outputs.append({
-                                "tool_call_id": call_id,
-                                "output": result
-                            })
-                            # Store the function call history
-                            function_call_history.append({
-                                "function": function_name,
-                                "args": args,
-                                "result": result
-                            })
                         else:
                             logger.warning(f"[OpenAI] Unknown function: {function_name}")
                             error_result = {"ok": False, "error": f"Unknown function: {function_name}"}
