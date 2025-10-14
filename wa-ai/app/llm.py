@@ -31,9 +31,9 @@ class LLMClient:
     "type": "function",
     "name": "fetch_product_details",
     "description": (
-      "Use ONLY when the user provides a clear Romstal product code "
-      "(ex: 64px9822). If the message lacks a code, do NOT call this; "
-      "ask for the code or consider web_search if they want docs/info."
+      "Use ONLY when the user provides a clear Romstal product code (ex: 64px9822). "
+      "If the message lacks a code, do NOT call this; ask for the code or consider "
+      "romstal_web_search if they want docs/info."
     ),
     "parameters": {
       "type": "object",
@@ -43,18 +43,29 @@ class LLMClient:
           "description": "Exact code string provided by the user (no extra text)."
         }
       },
-      "required": ["code"]
+      "required": ["code"],
+      "additionalProperties": False
     }
   },
   {
-    "type": "web_search",
-    "filters": {"allowed_domains": ["romstal.ro"]},
-    "user_location": {"type": "approximate", "country": "RO", "city": "București"},
-    # Optional guidance for the hosted tool:
+    "type": "function",  # <- use 'function' for full API compatibility
+    "name": "romstal_web_search",
     "description": (
-      "Search when user asks for recommandations of products or what product should he buy in a particular scenario,"
-      "WITHOUT giving a specific product code."
-    )
+      "Search when user asks for recommendations of products or what product they "
+      "should buy in a scenario, WITHOUT giving a specific product code. Restricted "
+      "to romstal.ro domain."
+    ),
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search query keywords"
+        }
+      },
+      "required": ["query"],
+      "additionalProperties": False
+    }
   }
 ]
 
