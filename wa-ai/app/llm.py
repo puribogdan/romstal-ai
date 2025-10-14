@@ -363,7 +363,7 @@ class LLMClient:
                     ],
                     tools=self.OPENAI_TOOLS,
                     tool_choice="auto",
-                    max_output_tokens=2500,  # Increased from 700 to allow for reasoning + response
+                    max_output_tokens=3500,  # Increased from 700 to allow for reasoning + response
                     reasoning={"effort": reasoning_effort}
                 )
 
