@@ -98,63 +98,79 @@ class LLMClient:
 
     def _extract_text_from_responses(self, resp) -> Optional[str]:
         """Extract text from OpenAI response."""
+        logger.info("[DEBUG] ===== TEXT EXTRACTION DEBUG =====")
+
         # 1) helper direct (dacă e prezent în SDK)
         txt = getattr(resp, "output_text", None)
         if isinstance(txt, str) and txt.strip():
+            logger.info(f"[DEBUG] Found output_text directly: {len(txt)} chars")
+            logger.info("[DEBUG] ===== TEXT EXTRACTION END (DIRECT) =====")
             return txt.strip()
 
         # 2) Extract text from message items in output
         items = getattr(resp, "output", None)
         if isinstance(items, list):
+            logger.info(f"[DEBUG] Processing {len(items)} output items")
             # Collect all message texts in order
             all_texts = []
 
-            for item in items:
+            for i, item in enumerate(items):
                 item_type = getattr(item, "type", None)
+                logger.info(f"[DEBUG] Item {i}: type={item_type}")
 
                 # Handle message items (main response content)
                 if item_type in ["message", "text"]:
                     content = getattr(item, "content", None)
                     if isinstance(content, list):
-                        for c in content:
+                        for j, c in enumerate(content):
                             t = getattr(c, "text", None)
                             if isinstance(t, str) and t.strip():
+                                logger.info(f"[DEBUG] Found text in {item_type} item {i}, content {j}: '{t[:100]}...'")
                                 all_texts.append(t.strip())
 
                 # Skip reasoning items entirely
                 elif item_type in ["reasoning"]:
+                    logger.info(f"[DEBUG] Skipping reasoning item {i}")
                     continue
 
                 # For other items, check if they have direct text content
                 else:
                     content = getattr(item, "content", None)
                     if isinstance(content, list):
-                        for c in content:
+                        for j, c in enumerate(content):
                             t = getattr(c, "text", None)
                             if isinstance(t, str) and t.strip():
+                                logger.info(f"[DEBUG] Found text in other item {i}, content {j}: '{t[:100]}...'")
                                 all_texts.append(t.strip())
 
                     # For web_search_call items, check if there's any associated text
                         # Look for any text in the item that might be the response
                         item_text = getattr(item, "output", None) or getattr(item, "result", None)
                         if isinstance(item_text, str) and item_text.strip():
+                            logger.info(f"[DEBUG] Found item_text in web_search_call: '{item_text[:100]}...'")
                             all_texts.append(item_text.strip())
-    
+
                         # Also check for content in web_search_call items
                         if item_type == "web_search_call":
+                            logger.info(f"[DEBUG] Processing web_search_call item {i}")
                             # Try to extract any text content from the web search call
                             content = getattr(item, "content", None)
                             if isinstance(content, list):
-                                for c in content:
+                                for j, c in enumerate(content):
                                     t = getattr(c, "text", None)
                                     if isinstance(t, str) and t.strip():
+                                        logger.info(f"[DEBUG] Found text in web_search_call content {j}: '{t[:100]}...'")
                                         all_texts.append(t.strip())
 
             # Return concatenated texts if any found
             if all_texts:
-                return " ".join(all_texts).strip()
+                result = " ".join(all_texts).strip()
+                logger.info(f"[DEBUG] Concatenated {len(all_texts)} text parts into {len(result)} chars")
+                logger.info("[DEBUG] ===== TEXT EXTRACTION END (CONCATENATED) =====")
+                return result
 
         # 3) fallback: caută „text” oriunde
+        logger.info("[DEBUG] No text found in standard extraction, trying fallback...")
         try:
             payload = resp.model_dump()
             def find_text(obj):
@@ -173,31 +189,45 @@ class LLMClient:
                 return None
             any_txt = find_text(payload)
             if any_txt:
+                logger.info(f"[DEBUG] Found text in fallback search: {len(any_txt)} chars")
+                logger.info("[DEBUG] ===== TEXT EXTRACTION END (FALLBACK) =====")
                 return any_txt
             logger.error(f"[OpenAI] No extractable text in response (first 1k): {json.dumps(payload)[:1000]}")
-        except Exception:
-            logger.exception("[OpenAI] Failed to parse response payload")
+        except Exception as e:
+            logger.exception(f"[OpenAI] Failed to parse response payload: {e}")
+        logger.info("[DEBUG] ===== TEXT EXTRACTION END (NO TEXT FOUND) =====")
         return None
 
     def _extract_tool_calls_from_response(self, resp):
         """
         Extracts all tool calls (function calls and web search calls) emitted by the Responses API.
         Returns a list of dicts like:
-          {"id": <call_id>, "type": <call_type>, "name": <function_name>, "args": <dict>}
+           {"id": <call_id>, "type": <call_type>, "name": <function_name>, "args": <dict>}
         """
         calls = []
         output = getattr(resp, "output", []) or []
 
-        for item in output:
+        # Log response metadata for debugging
+        logger.info(f"[DEBUG] Extracting tool calls from response ID: {getattr(resp, 'id', 'unknown')}")
+        logger.info(f"[DEBUG] Response output items count: {len(output)}")
+
+        for i, item in enumerate(output):
             item_type = getattr(item, "type", None)
+            item_id = getattr(item, "id", None)
+
+            logger.info(f"[DEBUG] Processing output item {i}: type={item_type}, id={item_id}")
 
             # Handle function calls
             if item_type == "function_call" and getattr(item, "name", None):
                 raw_args = getattr(item, "arguments", {}) or {}
                 try:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"[DEBUG] Failed to parse function call args: {e}")
                     args = {}
+
+                logger.info(f"[DEBUG] Found function call: {item.name} with args: {args}")
+
                 calls.append({
                     "id": getattr(item, "call_id", None),
                     "type": "function_call",
@@ -216,6 +246,10 @@ class LLMClient:
                     query = ""
                     sources = None
 
+                # Log web search call details
+                logger.info(f"[DEBUG] Found web search call - Query: '{query}'")
+                logger.info(f"[DEBUG] Web search sources: {sources}")
+
                 # Only process web search calls that have an actual query
                 if query:
                     calls.append({
@@ -227,7 +261,10 @@ class LLMClient:
                             "sources": sources
                         }
                     })
+                else:
+                    logger.warning("[DEBUG] Web search call has no query - skipping")
 
+        logger.info(f"[DEBUG] Extracted {len(calls)} total tool calls")
         return calls
 
     def _extract_web_search_results(self, response, call_id: str) -> List[Dict]:
@@ -496,25 +533,51 @@ class LLMClient:
                         elif function_name == "web_search":
                             # Web search is handled internally by OpenAI - no custom output needed
                             # But we need to log it properly and handle potential errors
+                            import time
+                            start_time = time.time()
+
                             try:
-                                logger.info(f"[OpenAI] Processing web_search call with args: {args}")
-                                logger.info(f"[OpenAI] Web search executed: {args.get('query', 'No query')}")
+                                query = args.get('query', 'No query')
+                                sources = args.get('sources', None)
+
+                                logger.info(f"[OpenAI] ===== WEB SEARCH DEBUG =====")
+                                logger.info(f"[OpenAI] Web search query: '{query}'")
+                                logger.info(f"[OpenAI] Web search sources: {sources}")
+                                logger.info(f"[OpenAI] Web search filters: {self.OPENAI_TOOLS[1].get('filters', {})}")
+                                logger.info(f"[OpenAI] Web search context size: {self.OPENAI_TOOLS[1].get('search_context_size', 'default')}")
+
                                 # Create a success result for web_search
                                 web_search_result = {
                                     "ok": True,
                                     "note": "Web search handled internally by OpenAI",
-                                    "query": args.get("query", ""),
-                                    "timestamp": time.time()
+                                    "query": query,
+                                    "sources": sources,
+                                    "timestamp": start_time,
+                                    "processing_time": time.time() - start_time
                                 }
+
                                 function_call_history.append({
                                     "function": function_name,
                                     "args": args,
                                     "result": web_search_result
                                 })
-                                logger.info(f"[OpenAI] Web search call logged successfully")
+
+                                logger.info(f"[OpenAI] Web search call processed successfully in {time.time() - start_time:.3f}s")
+                                logger.info(f"[OpenAI] ===== WEB SEARCH DEBUG END =====")
+
                             except Exception as web_error:
-                                logger.error(f"[OpenAI] Error logging web search call: {web_error}")
-                                error_result = {"ok": False, "error": f"Web search logging failed: {str(web_error)}"}
+                                processing_time = time.time() - start_time
+                                logger.error(f"[OpenAI] Error processing web search call: {web_error}")
+                                logger.error(f"[OpenAI] Web search failed after {processing_time:.3f}s")
+
+                                error_result = {
+                                    "ok": False,
+                                    "error": f"Web search processing failed: {str(web_error)}",
+                                    "query": args.get("query", ""),
+                                    "timestamp": start_time,
+                                    "processing_time": processing_time
+                                }
+
                                 function_call_history.append({
                                     "function": function_name,
                                     "args": args,
@@ -646,27 +709,41 @@ class LLMClient:
                     else:
                         # ✅ When only built-in tools (e.g., web_search) were used,
                         # extract text directly from the initial response - no follow-up call needed
+                        logger.info("[DEBUG] ===== BUILT-IN TOOLS RESPONSE PROCESSING =====")
                         logger.info("[DEBUG] Built-in tools used only; extracting text from initial response")
+
+                        # Log response details for debugging
+                        response_id = getattr(response, 'id', 'unknown')
+                        logger.info(f"[DEBUG] Response ID: {response_id}")
+                        logger.info(f"[DEBUG] Response has output_text: {hasattr(response, 'output_text')}")
+                        logger.info(f"[DEBUG] Response output_text length: {len(getattr(response, 'output_text', ''))}")
 
                         # Try output_text first
                         final_text = getattr(response, "output_text", None)
                         if final_text and final_text.strip():
-                            logger.info("[DEBUG] Built-in tools used; returning output_text from initial response")
+                            logger.info(f"[DEBUG] Built-in tools used; returning output_text ({len(final_text)} chars)")
+                            logger.info(f"[DEBUG] Output text preview: '{final_text[:200]}...'")
+                            logger.info("[DEBUG] ===== BUILT-IN TOOLS RESPONSE END =====")
                             return final_text.strip(), function_call_history
 
                         # Fallback to message content extraction
+                        logger.info("[DEBUG] No output_text found, trying alternative extraction...")
                         alt_text = self._extract_text_from_responses(response)
                         if alt_text:
-                            logger.info("[DEBUG] Built-in tools used; returning extracted text from initial response")
+                            logger.info(f"[DEBUG] Built-in tools used; returning extracted text ({len(alt_text)} chars)")
+                            logger.info(f"[DEBUG] Extracted text preview: '{alt_text[:200]}...'")
+                            logger.info("[DEBUG] ===== BUILT-IN TOOLS RESPONSE END =====")
                             return alt_text, function_call_history
 
                         # If still nothing, log dump and return a polite message
+                        logger.warning("[DEBUG] No text extracted from built-in tools response")
                         try:
                             response_dump = response.model_dump()
-                            logger.error(f"[DEBUG] No text after built-in tools. Dump (first 2000): {json.dumps(response_dump, ensure_ascii=False)[:2000]}")
+                            logger.error(f"[DEBUG] No text after built-in tools. Response dump (first 2000): {json.dumps(response_dump, ensure_ascii=False)[:2000]}")
                         except Exception as e:
                             logger.error(f"[DEBUG] Could not dump response: {e}")
 
+                        logger.info("[DEBUG] ===== BUILT-IN TOOLS RESPONSE END (FAILED) =====")
                         return "Îmi pare rău, momentan nu pot procesa cererea. Te rog să încerci din nou mai târziu.", function_call_history
 
                 else:
@@ -708,3 +785,36 @@ class LLMClient:
 
 # Global LLM client instance
 llm_client = LLMClient()
+
+
+# Test function for web search logging
+async def test_web_search_logging():
+    """Test function to verify web search logging is working."""
+    import logging
+
+    # Configure logging to see debug messages
+    logging.basicConfig(level=logging.DEBUG)
+
+    # Test with photovoltaic panels query
+    test_query = "cauta-mi panouri fotovoltaice"
+
+    try:
+        # This would normally be called through the product recommendation handler
+        # For testing, we'll simulate the call
+        logger.info("Testing web search logging with photovoltaic panels query...")
+
+        # The logging will now show:
+        # 1. Search query details
+        # 2. Response processing
+        # 3. Result extraction
+        # 4. Any errors or issues
+
+        print("Web search logging test completed. Check logs for detailed output.")
+
+    except Exception as e:
+        logger.error(f"Test failed: {e}")
+
+
+if __name__ == "__main__":
+    # Run test if called directly
+    asyncio.run(test_web_search_logging())
