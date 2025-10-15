@@ -52,7 +52,7 @@ class LLMClient:
             "type": "web_search",
             "filters": {"allowed_domains": ["romstal.ro", "www.romstal.ro"]},
             "user_location": {"type": "approximate", "country": "RO", "city": "București"},
-            "search_context_size": "medium"
+            "search_context_size": "low"
         }
     ]
 
