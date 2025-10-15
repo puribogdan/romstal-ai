@@ -135,11 +135,20 @@ class LLMClient:
                                 all_texts.append(t.strip())
 
                     # For web_search_call items, check if there's any associated text
-                    if item_type in ["function_call", "web_search_call"]:
                         # Look for any text in the item that might be the response
                         item_text = getattr(item, "output", None) or getattr(item, "result", None)
                         if isinstance(item_text, str) and item_text.strip():
                             all_texts.append(item_text.strip())
+    
+                        # Also check for content in web_search_call items
+                        if item_type == "web_search_call":
+                            # Try to extract any text content from the web search call
+                            content = getattr(item, "content", None)
+                            if isinstance(content, list):
+                                for c in content:
+                                    t = getattr(c, "text", None)
+                                    if isinstance(t, str) and t.strip():
+                                        all_texts.append(t.strip())
 
             # Return concatenated texts if any found
             if all_texts:
@@ -363,6 +372,7 @@ class LLMClient:
 
                 if has_web_search:
                     logger.info(f"[OpenAI] [{correlation_id}] Web search tool available, using medium reasoning effort")
+                    logger.info(f"[OpenAI] [{correlation_id}] Web search tool config: {json.dumps([tool for tool in self.OPENAI_TOOLS if tool.get('type') == 'web_search'], indent=2)}")
 
                 # Retry configuration for token ceiling issues
                 max_retries = 2
@@ -426,8 +436,10 @@ class LLMClient:
                         break
 
                     except Exception as e:
+                        logger.error(f"[OpenAI] [{correlation_id}] Attempt {attempt + 1} failed: {type(e).__name__}: {str(e)}")
                         if attempt < max_retries - 1:
                             logger.warning(f"[OpenAI] [{correlation_id}] Attempt {attempt + 1} failed: {e}, retrying...")
+                            await asyncio.sleep(self.retry_delay * (attempt + 1))  # Exponential backoff
                             continue
                         else:
                             logger.error(f"[OpenAI] [{correlation_id}] All {max_retries} attempts failed")
@@ -483,13 +495,31 @@ class LLMClient:
                             })
                         elif function_name == "web_search":
                             # Web search is handled internally by OpenAI - no custom output needed
-                            # Just log the search execution for tracking
-                            logger.info(f"[OpenAI] Web search executed: {args.get('query', 'No query')}")
-                            function_call_history.append({
-                                "function": function_name,
-                                "args": args,
-                                "result": {"ok": True, "note": "Web search handled internally by OpenAI"}
-                            })
+                            # But we need to log it properly and handle potential errors
+                            try:
+                                logger.info(f"[OpenAI] Processing web_search call with args: {args}")
+                                logger.info(f"[OpenAI] Web search executed: {args.get('query', 'No query')}")
+                                # Create a success result for web_search
+                                web_search_result = {
+                                    "ok": True,
+                                    "note": "Web search handled internally by OpenAI",
+                                    "query": args.get("query", ""),
+                                    "timestamp": time.time()
+                                }
+                                function_call_history.append({
+                                    "function": function_name,
+                                    "args": args,
+                                    "result": web_search_result
+                                })
+                                logger.info(f"[OpenAI] Web search call logged successfully")
+                            except Exception as web_error:
+                                logger.error(f"[OpenAI] Error logging web search call: {web_error}")
+                                error_result = {"ok": False, "error": f"Web search logging failed: {str(web_error)}"}
+                                function_call_history.append({
+                                    "function": function_name,
+                                    "args": args,
+                                    "result": error_result
+                                })
                         else:
                             logger.warning(f"[OpenAI] Unknown function: {function_name}")
                             error_result = {"ok": False, "error": f"Unknown function: {function_name}"}
