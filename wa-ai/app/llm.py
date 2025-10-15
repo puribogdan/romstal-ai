@@ -49,9 +49,9 @@ class LLMClient:
         },
         {
             "type": "web_search",
-            "filters": {"allowed_domains": ["romstal.ro"]},
+            "filters": {"allowed_domains": ["romstal.ro", "www.romstal.ro"]},
             "user_location": {"type": "approximate", "country": "RO", "city": "București"},
-            "search_context_size": "low"
+            "search_context_size": "medium"
         }
     ]
 
@@ -401,7 +401,7 @@ class LLMClient:
                 "Când utilizatorul cere recomandări sau produse:\n"
                 "- FOLOSEȘTE web_search.\n"
                 "- NU adresa întrebări și NU cere clarificări."
-                "- Returnează DIRECT o listă cu 3-6 produse de pe romstal.ro \n"
+                "- Returnează DIRECT o listă cu 3-6 produse \n"
                 "- „Dacă găsești pagini de categorie sau rezultate parțial relevante, afișează-le totuși (cu notă 'categorie generală') în loc să spui că nu ai găsit nimic.\n"
                 "- Format STRICT (fără introducere, fără concluzie):\n"
                 "  - **Nume produs** — motiv scurt (max 1 propoziție; include prețul doar dacă apare în fragment)\n"
