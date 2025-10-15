@@ -413,18 +413,19 @@ class LLMClient:
 
                 # Retry configuration for token ceiling issues
                 max_retries = 2
-                current_search_context_size = "low"
+                current_search_context_size = "medium"  # Start with medium for better results
                 response = None
 
                 for attempt in range(max_retries):
                     try:
                         # Update tools with current search context size if web search is used
                         current_tools = self.OPENAI_TOOLS.copy()
-                        if has_web_search and current_search_context_size == "medium":
-                            # Update the web_search tool with medium context size
+                        if has_web_search:
+                            # Update the web_search tool with current context size
                             for tool in current_tools:
                                 if tool.get("type") == "web_search":
-                                    tool["search_context_size"] = "medium"
+                                    tool["search_context_size"] = current_search_context_size
+                                    logger.info(f"[OpenAI] [{correlation_id}] Using search_context_size: {current_search_context_size}")
                                     break
 
                         current_max_tokens = 6000 + (attempt * 400)  # Increase by 400 on retry
@@ -436,6 +437,7 @@ class LLMClient:
                         reasoning_effort = "medium" if has_web_search else "minimal"
 
                         logger.info(f"[OpenAI] [{correlation_id}] Using reasoning effort: {reasoning_effort} (web_search: {has_web_search})")
+                        logger.info(f"[OpenAI] [{correlation_id}] Current tools web_search context_size: {[tool.get('search_context_size') for tool in current_tools if tool.get('type') == 'web_search']}")
 
                         response = self.client.responses.create(
                             model=settings.openai_model,
@@ -459,7 +461,12 @@ class LLMClient:
                                 if attempt < max_retries - 1:  # Not the last attempt
                                     # Try with even higher token limit and minimal reasoning
                                     current_max_tokens = min(current_max_tokens + 2000, 10000)  # Cap at 10k tokens
-                                    logger.info(f"[OpenAI] [{correlation_id}] Retrying with higher token limit: {current_max_tokens}")
+                                    # Increase context size for retry attempts
+                                    if current_search_context_size == "medium":
+                                        current_search_context_size = "high"
+                                        logger.info(f"[OpenAI] [{correlation_id}] Retrying with higher token limit: {current_max_tokens} and increased context_size: {current_search_context_size}")
+                                    else:
+                                        logger.info(f"[OpenAI] [{correlation_id}] Retrying with higher token limit: {current_max_tokens}")
                                     continue
                                 else:
                                     logger.error(f"[OpenAI] [{correlation_id}] Final attempt failed due to max_output_tokens")
@@ -721,8 +728,46 @@ class LLMClient:
                         # Try output_text first
                         final_text = getattr(response, "output_text", None)
                         if final_text and final_text.strip():
+                            logger.info(f"[DEBUG] ===== WEB SEARCH RESULTS ANALYSIS =====")
                             logger.info(f"[DEBUG] Built-in tools used; returning output_text ({len(final_text)} chars)")
                             logger.info(f"[DEBUG] Output text preview: '{final_text[:200]}...'")
+                            logger.info(f"[DEBUG] Full output text: '{final_text}'")
+
+                            # Analyze the content to see if it contains product information
+                            lower_text = final_text.lower()
+                            has_products = any(keyword in lower_text for keyword in ['panou', 'fotovoltaic', 'produs', 'pret', 'lei', 'ron', 'disponibil'])
+                            has_general_pages = any(keyword in lower_text for keyword in ['cariere', 'academie', 'contact', 'despre', 'companie'])
+
+                            logger.info(f"[DEBUG] Content analysis:")
+                            logger.info(f"[DEBUG] - Contains product keywords: {has_products}")
+                            logger.info(f"[DEBUG] - Contains general pages: {has_general_pages}")
+                            logger.info(f"[DEBUG] - Response type: {'PRODUCT_RESULTS' if has_products else 'GENERAL_PAGES' if has_general_pages else 'UNCLEAR'}")
+
+                            logger.info("[DEBUG] ===== FINAL RESPONSE ANALYSIS =====")
+                            logger.info(f"[DEBUG] Final response length: {len(final_text)} characters")
+                            logger.info(f"[DEBUG] Final response preview: '{final_text[:300]}...'")
+
+                            # Analyze what type of response this is
+                            response_lower = final_text.lower()
+                            is_product_response = any(keyword in response_lower for keyword in [
+                                'panou', 'fotovoltaic', 'produs', 'specificații', 'pret', 'lei', 'ron',
+                                'disponibil', 'stoc', 'recomand', 'găsit'
+                            ])
+                            is_general_response = any(keyword in response_lower for keyword in [
+                                'cariere', 'academie', 'contact', 'despre noi', 'companie', 'general'
+                            ])
+                            needs_clarification = any(keyword in response_lower for keyword in [
+                                'mai specific', 'detalii', 'clarificare', 'nu am găsit', 'încearcă'
+                            ])
+
+                            logger.info(f"[DEBUG] Response classification:")
+                            logger.info(f"[DEBUG] - Is product response: {is_product_response}")
+                            logger.info(f"[DEBUG] - Is general page response: {is_general_response}")
+                            logger.info(f"[DEBUG] - Needs clarification: {needs_clarification}")
+                            logger.info(f"[DEBUG] - Response quality: {'GOOD' if is_product_response else 'POOR' if is_general_response else 'NEEDS_CLARIFICATION' if needs_clarification else 'UNCLEAR'}")
+
+                            logger.info("[DEBUG] ===== FINAL RESPONSE ANALYSIS END =====")
+                            logger.info("[DEBUG] ===== WEB SEARCH RESULTS ANALYSIS END =====")
                             logger.info("[DEBUG] ===== BUILT-IN TOOLS RESPONSE END =====")
                             return final_text.strip(), function_call_history
 
