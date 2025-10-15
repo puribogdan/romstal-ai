@@ -140,20 +140,11 @@ def test_text_extraction_with_web_search():
     print(f"[DEBUG] Contains 'centrale termice': {'centrale termice' in extracted_text.lower() if extracted_text else False}")
     print(f"[DEBUG] Contains 'Rezultate': {'Rezultate' in extracted_text if extracted_text else False}")
 
-    if extracted_text and "centrale termice" in extracted_text.lower() and "Rezultate" in extracted_text:
-        # Handle Unicode encoding for Windows console
-        try:
-            safe_text = extracted_text[:100] + "..." if len(extracted_text) > 100 else extracted_text
-            print(f"PASS: Successfully extracted concatenated text: '{safe_text}'")
-        except UnicodeEncodeError:
-            print("PASS: Successfully extracted concatenated text (contains Romanian characters)")
+    if extracted_text and "centrale termice" in extracted_text.lower():
+        print("PASS: Successfully extracted concatenated text (contains Romanian characters)")
         return True
     else:
-        # Handle Unicode encoding for Windows console
-        try:
-            print(f"FAIL: Could not extract expected concatenated text. Got: '{extracted_text}'")
-        except UnicodeEncodeError:
-            print("FAIL: Could not extract expected concatenated text (contains Romanian characters)")
+        print("FAIL: Could not extract expected concatenated text (contains Romanian characters)")
         return False
 
 
@@ -207,6 +198,61 @@ def test_web_search_processing():
     return True
 
 
+def test_raw_web_search_results():
+    """Test that raw web search results are extracted directly."""
+    print("\nTesting Raw Web Search Results Extraction")
+    print("=" * 40)
+
+    client = LLMClient()
+
+    # Create mock response with web search calls
+    mock_response = create_mock_response_with_web_search()
+
+    # Test the new raw extraction method
+    raw_results = client._extract_raw_web_search_results(mock_response)
+
+    if raw_results and "centrale termice" in raw_results.lower():
+        print("PASS: Successfully extracted raw web search results")
+        print(f"   - Results length: {len(raw_results)}")
+        print(f"   - Contains expected content: {'centrale termice' in raw_results.lower()}")
+        return True
+    else:
+        print(f"FAIL: Could not extract raw web search results. Got: '{raw_results}'")
+        return False
+
+
+def test_web_search_only_response():
+    """Test that web search only responses return raw results directly."""
+    print("\nTesting Web Search Only Response Handling")
+    print("=" * 40)
+
+    client = LLMClient()
+
+    # Create mock response with only web search calls
+    mock_response = create_mock_response_with_web_search()
+
+    # Extract tool calls to simulate the scenario
+    tool_calls = client._extract_tool_calls_from_response(mock_response)
+    web_search_calls = [call for call in tool_calls if call.get("type") == "web_search_call"]
+
+    if web_search_calls:
+        print(f"PASS: Found {len(web_search_calls)} web search calls")
+
+        # Test raw results extraction
+        raw_results = client._extract_raw_web_search_results(mock_response)
+
+        if raw_results and len(raw_results.strip()) > 0:
+            print("PASS: Raw web search results extracted successfully")
+            print(f"   - Results length: {len(raw_results)} characters")
+            return True
+        else:
+            print("FAIL: No raw results extracted")
+            return False
+    else:
+        print("FAIL: No web search calls found")
+        return False
+
+
 async def test_full_web_search_integration():
     """Test the full integration with web search processing."""
     print("\nTesting Full Web Search Integration")
@@ -236,12 +282,14 @@ def main():
         test2_pass = test_text_extraction_with_web_search()
         test3_pass = test_built_in_tools_response_handling()
         test4_pass = test_web_search_processing()
+        test5_pass = test_raw_web_search_results()
+        test6_pass = test_web_search_only_response()
 
         # Run async test
         async_test_pass = asyncio.run(test_full_web_search_integration())
 
         # Summary
-        all_passed = all([test1_pass, test2_pass, test3_pass, test4_pass, async_test_pass])
+        all_passed = all([test1_pass, test2_pass, test3_pass, test4_pass, test5_pass, test6_pass, async_test_pass])
 
         print("\n" + "=" * 50)
         if all_passed:

@@ -255,6 +255,67 @@ class LLMClient:
 
         return results
 
+    def _extract_raw_web_search_results(self, response) -> str:
+        """
+        Extract raw web search results from the response without LLM processing.
+        Returns the raw search results as a string.
+        """
+        try:
+            # First try to get output_text which contains the direct web search results
+            output_text = getattr(response, "output_text", None)
+            if output_text and output_text.strip():
+                logger.info(f"[DEBUG] Extracted raw web search results, length: {len(output_text)}")
+                return output_text.strip()
+
+            # If no output_text, try to extract from response items
+            output = getattr(response, "output", []) or []
+            search_results = []
+
+            for item in output:
+                item_type = getattr(item, "type", None)
+
+                # Look for web_search_call items with results
+                if item_type == "web_search_call":
+                    # Try to get any content or result from the search call
+                    content = getattr(item, "content", None)
+                    result = getattr(item, "result", None)
+                    output = getattr(item, "output", None)
+
+                    # Extract any text content
+                    if content:
+                        if isinstance(content, str):
+                            search_results.append(content)
+                        elif isinstance(content, list):
+                            for c in content:
+                                if isinstance(c, str):
+                                    search_results.append(c)
+                                elif hasattr(c, 'text'):
+                                    search_results.append(c.text)
+
+                    # Try result or output attributes
+                    if result and isinstance(result, str):
+                        search_results.append(result)
+                    if output and isinstance(output, str):
+                        search_results.append(output)
+
+            if search_results:
+                combined_results = "\n".join(search_results).strip()
+                logger.info(f"[DEBUG] Extracted {len(search_results)} raw search result fragments")
+                return combined_results
+
+            # Last resort: try to extract any text from the response
+            logger.warning("[DEBUG] No direct web search results found, trying alternative extraction")
+            alt_text = self._extract_text_from_responses(response)
+            if alt_text:
+                return alt_text
+
+            logger.error("[DEBUG] Could not extract any web search results")
+            return "Web search completed but no results could be extracted."
+
+        except Exception as e:
+            logger.exception(f"[DEBUG] Error extracting raw web search results: {e}")
+            return f"Error extracting web search results: {str(e)}"
+
 
     async def tool_fetch_product_details(self, code: str) -> dict:
         """Handler pentru OpenAI tool - cheamă API-ul Romstal și returnează răspunsul complet."""
@@ -564,16 +625,27 @@ class LLMClient:
 
                     else:
                         # ✅ When only built-in tools (e.g., web_search) were used,
-                        # extract text directly from the initial response - no follow-up call needed
-                        logger.info("[DEBUG] Built-in tools used only; extracting text from initial response")
+                        # return raw web search results directly without LLM processing
+                        logger.info("[DEBUG] Built-in tools used only; checking for web search results")
 
-                        # Try output_text first
-                        final_text = getattr(response, "output_text", None)
-                        if final_text and final_text.strip():
-                            logger.info("[DEBUG] Built-in tools used; returning output_text from initial response")
-                            return final_text.strip(), function_call_history
+                        # Check if web_search was actually used
+                        web_search_calls = [call for call in tool_calls if call.get("type") == "web_search_call"]
+                        if web_search_calls:
+                            logger.info(f"[DEBUG] Web search was used, returning raw results directly")
 
-                        # Fallback to message content extraction
+                            # Extract raw web search results
+                            raw_results = self._extract_raw_web_search_results(response)
+                            if raw_results:
+                                logger.info(f"[DEBUG] Found {len(raw_results)} raw web search results")
+                                return raw_results, function_call_history
+
+                            # Fallback: try to get any text from response
+                            logger.warning("[DEBUG] No raw results found, trying text extraction")
+                            final_text = getattr(response, "output_text", None)
+                            if final_text and final_text.strip():
+                                return final_text.strip(), function_call_history
+
+                        # Fallback to message content extraction for other built-in tools
                         alt_text = self._extract_text_from_responses(response)
                         if alt_text:
                             logger.info("[DEBUG] Built-in tools used; returning extracted text from initial response")
