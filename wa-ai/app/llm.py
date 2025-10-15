@@ -396,7 +396,7 @@ class LLMClient:
                             tools=current_tools,
                             tool_choice="auto",
                             max_output_tokens=current_max_tokens,
-                            reasoning={"effort": reasoning_effort}
+                            reasoning={"effort": "minimal"}  # Use minimal reasoning to save tokens for response
                         )
 
                         # Check if response was truncated due to token limit - short-circuit for immediate handling
@@ -404,17 +404,14 @@ class LLMClient:
                             if response.incomplete_details.reason == "max_output_tokens":
                                 logger.warning(f"[OpenAI] [{correlation_id}] Response truncated due to max_output_tokens, attempt {attempt + 1}")
                                 if attempt < max_retries - 1:  # Not the last attempt
-                                    if current_search_context_size == "low":
-                                        current_search_context_size = "medium"
-                                        logger.info(f"[OpenAI] [{correlation_id}] Retrying with search_context_size=medium")
-                                        continue
-                                    else:
-                                        logger.info(f"[OpenAI] [{correlation_id}] Already using search_context_size=medium, increasing tokens")
-                                        continue
+                                    # Try with even higher token limit and minimal reasoning
+                                    current_max_tokens = min(current_max_tokens + 2000, 10000)  # Cap at 10k tokens
+                                    logger.info(f"[OpenAI] [{correlation_id}] Retrying with higher token limit: {current_max_tokens}")
+                                    continue
                                 else:
                                     logger.error(f"[OpenAI] [{correlation_id}] Final attempt failed due to max_output_tokens")
                                     # Return concise fallback for partial results
-                                    fallback_text = "Am găsit informații parțiale. Pentru rezultate complete, te rog să reformulezi întrebarea mai specific."
+                                    fallback_text = "Am găsit informații. Pentru detalii complete, te rog să întrebi mai specific despre un produs anume."
                                     return fallback_text, []
                             else:
                                 logger.warning(f"[OpenAI] [{correlation_id}] Response incomplete for other reason: {response.incomplete_details.reason}")
@@ -541,12 +538,33 @@ class LLMClient:
                             input=follow_up_input,
                             tools=self.OPENAI_TOOLS,
                             previous_response_id=response.id,  # Thread the conversation
-                            max_output_tokens=1000,  # Reduced to prevent token ceiling issues
-                            reasoning={"effort": follow_up_reasoning_effort}
+                            max_output_tokens=4000,  # Increased to handle function call responses properly
+                            reasoning={"effort": "minimal"}  # Use minimal reasoning to save tokens for actual response
                         )
 
                         logger.info(f"[DEBUG] Follow-up response ID: {follow_up_response.id}")
                         logger.info(f"[DEBUG] Follow-up response output_text present: {hasattr(follow_up_response, 'output_text') and follow_up_response.output_text is not None}")
+
+                        # Check if follow-up response was also truncated
+                        if hasattr(follow_up_response, 'incomplete_details') and follow_up_response.incomplete_details:
+                            if follow_up_response.incomplete_details.reason == "max_output_tokens":
+                                logger.warning(f"[OpenAI] [{correlation_id}] Follow-up response also truncated, trying with higher token limit")
+                                # Try one more time with even higher token limit
+                                try:
+                                    final_response = self.client.responses.create(
+                                        model=settings.openai_model,
+                                        input=follow_up_input,
+                                        tools=self.OPENAI_TOOLS,
+                                        previous_response_id=response.id,
+                                        max_output_tokens=6000,  # Higher limit for final attempt
+                                        reasoning={"effort": "minimal"}
+                                    )
+                                    final_text = final_response.output_text
+                                    if final_text:
+                                        logger.info(f"[DEBUG] ===== Final attempt successful, returning text length: {len(final_text)} =====")
+                                        return final_text.strip(), function_call_history
+                                except Exception as e:
+                                    logger.error(f"[OpenAI] [{correlation_id}] Final attempt also failed: {e}")
 
                         # Extract final response text from follow-up call
                         final_text = follow_up_response.output_text
@@ -560,6 +578,22 @@ class LLMClient:
                             if alt_text:
                                 logger.info(f"[DEBUG] Alternative extraction succeeded, length: {len(alt_text)}")
                                 return alt_text, function_call_history
+
+                            # Last resort: return a summary based on function call results
+                            logger.warning(f"[OpenAI] [{correlation_id}] All extraction methods failed, using function call results")
+                            function_summaries = []
+                            for call in function_call_history:
+                                if call.get("result", {}).get("ok"):
+                                    func_name = call.get("function", "unknown")
+                                    if func_name == "fetch_product_details":
+                                        data = call.get("result", {}).get("data", {})
+                                        if isinstance(data, dict) and "info" in data:
+                                            info = data["info"]
+                                            product_name = info.get("product", "Produs")
+                                            function_summaries.append(f"Am găsit: {product_name}")
+                            if function_summaries:
+                                return " ".join(function_summaries), function_call_history
+
                             logger.error(f"[DEBUG] Follow-up response dump: {follow_up_response.model_dump()}")
 
                     else:
