@@ -15,6 +15,7 @@ from app.supa import supabase_client
 from app.llm import llm_client
 from app.outbound import n8n_client
 from app.ocr import ocr_client
+from app.prompts import PromptManager
 
 # Import PDF handler
 from handlers.handle_pdf_message import pdf_handler
@@ -579,21 +580,26 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
             "note": "Response already sent by PDF handler"
         }
 
-    # Check if this message should trigger product recommendations
-    # The LLM will automatically decide based on message content and use appropriate tools
-    product_rec_response = await process_product_recommendation_message(payload.id or 0)
+    # Use intelligent tool decision based on message content
+    message_analysis = PromptManager.analyze_message_type(current_message)
 
-    if product_rec_response:
-        # Product recommendation was successfully processed, response already sent by handler
-        logger.info(f"[PRODUCT-REC] Product recommendation processed successfully, response sent by handler")
+    if message_analysis["use_tools"]:
+        # Message needs tools - use product recommendation handler
+        logger.info(f"[AI-DECISION] Message type: {message_analysis['type']}, using tools")
+        product_rec_response = await process_product_recommendation_message(payload.id or 0)
 
-        return {
-            "ok": True,
-            "conversation_count": len(recent_messages),
-            "ai_reply": product_rec_response,
-            "processed_as": "product_recommendation",
-            "note": "Response already sent by product recommendation handler"
-        }
+        if product_rec_response:
+            logger.info(f"[PRODUCT-REC] Product recommendation processed successfully, response sent by handler")
+            return {
+                "ok": True,
+                "conversation_count": len(recent_messages),
+                "ai_reply": product_rec_response,
+                "processed_as": "product_recommendation",
+                "note": "Response already sent by product recommendation handler"
+            }
+    else:
+        # Simple message - no tools needed
+        logger.info(f"[AI-DECISION] Message type: {message_analysis['type']}, using simple response")
 
     # Use the current message for AI response (regular text processing)
     user_message_to_respond = current_message
@@ -666,23 +672,8 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
             safe_text = msg['text'][:50].encode('ascii', 'ignore').decode('ascii')
             print(f"   {i+1}. {msg['from']}: {safe_text}...")
 
-        system_prompt = (
-            "Ești un asistent Romstal prietenos și util pe WhatsApp.\n"
-            "Răspunde în română, natural și conversațional.\n"
-            "Poți purta discuții casual și răspunde la întrebări personale simple, dar rolul tău principal este să ajuți utilizatorii cu informații despre Romstal, produse, servicii, program, livrare și alte detalii utile.\n"
-            "Fii prietenos, natural și adaptabil — dacă cineva te întreabă „ce faci\" sau „cum ești\", răspunde firesc, ca un prieten.\n"
-            "Dacă nu știi sigur un detaliu despre Romstal, spune că vei verifica și vei reveni cu informațiile corecte.\n"
-            "Important:\n"
-            "- Nu propune acțiuni precum adăugarea produselor în stoc, efectuarea comenzilor, programări sau alte procese operative.\n"
-            "- Nu poti sa ghidezi utilizatorul recomandandu-i produse\n"
-            "- Nu face follow-up pentru a oferi servicii sau a iniția alte conversații.\n"
-            "- Poți face follow-up doar despre produsul sau subiectul discutat (ex: recomandări similare, specificații, întreținere, garanție etc.).\n"
-            "- Poți referi utilizatorul la produse discutate anterior în conversație pentru întrebări de follow-up.\n"
-            "- Dacă utilizatorul întreabă despre produse menționate anterior, poți oferi informații suplimentare despre acestea.\n"
-            "- Menține un ton profesionist, empatic și prietenos, ca un consultant Romstal care vorbește relaxat, dar informat.\n"
-            "- Nu poti verifica termenul de livrare al unui produs\n"
-            "- Nu face follow-up questions pentru a oferi servicii sau a iniția alte conversații.\n"
-        )
+        # Use the unified system prompt
+        system_prompt = PromptManager.get_unified_prompt()
 
         # Update session with correct system prompt if it was created empty
         if session and not session.get("system_prompt"):
@@ -696,9 +687,22 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
             "Dacă utilizatorul întreabă despre produse menționate anterior, poți referi la acestea și oferi informații suplimentare."
         )
 
-        # Call LLM with tools and capture any function call details
+        # Use intelligent LLM call based on message analysis
         correlation_id = generate_correlation_id()
-        reply_text, function_call_details = await llm_client.call_llm_with_tools(system_prompt, user_prompt, correlation_id)
+
+        if message_analysis["use_tools"]:
+            # Use tools for product-related queries
+            logger.info(f"[LLM] Using tools for message type: {message_analysis['type']}")
+            reply_text, function_call_details = await llm_client.call_llm_with_tools(
+                PromptManager.get_prompt_with_tools(), user_prompt, correlation_id
+            )
+        else:
+            # Use simple LLM for greetings and general queries
+            logger.info(f"[LLM] Using simple response for message type: {message_analysis['type']}")
+            reply_text = llm_client.call_llm(
+                PromptManager.get_prompt_without_tools(), user_prompt
+            )
+            function_call_details = None
 
         # Update conversation session with user message, function calls (if any), and AI response
         if session:

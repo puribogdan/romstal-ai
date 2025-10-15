@@ -23,6 +23,9 @@ from app.llm import llm_client
 from app.settings import settings
 from app.outbound import n8n_client
 
+# Import centralized prompt management
+from app.prompts import PromptManager
+
 # Import correlation tracking
 from app.correlation import (
     generate_correlation_id,
@@ -661,19 +664,8 @@ class PDFMessageHandler:
             if recent_messages:
                 context += "Context conversație recentă:\n" + "\n".join(recent_messages) + "\n\n"
 
-            # Create system prompt for PDF processing
-            system_prompt = (
-                "Ești un asistent Romstal prietenos și util pe WhatsApp.\n"
-                "Utilizatorul ți-a trimis un PDF. Analizează conținutul și oferă informații relevante.\n"
-                "Răspunde în română, natural și conversațional.\n"
-                "Poți purta discuții casual și răspunde la întrebări personale simple, dar rolul tău principal este să ajuți utilizatorii cu informații despre Romstal, produse, servicii, program, livrare și alte detalii utile.\n"
-                "Fii prietenos, natural și adaptabil.\n"
-                "Important:\n"
-                "- Nu propune acțiuni precum adăugarea produselor în stoc, efectuarea comenzilor, programări sau alte procese operative.\n"
-                "- Nu face follow-up pentru a oferi servicii sau a iniția alte conversații.\n"
-                "- Poți face follow-up doar despre produsul sau subiectul discutat (ex: recomandări similare, specificații, întreținere, garanție etc.).\n"
-                "- Menține un ton profesionist, empatic și prietenos, ca un consultant Romstal care vorbește relaxat, dar informat.\n"
-            )
+            # Use the unified system prompt
+            system_prompt = PromptManager.get_unified_prompt()
 
             # Generate AI response using existing LLM client
             user_prompt = f"{context}\nBazat pe conținutul PDF și contextul conversației, generează un răspuns helpful și natural în română."

@@ -8,6 +8,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from openai import OpenAI
 from .settings import settings
 from .correlation import generate_correlation_id, get_correlation_id, set_correlation_id, CorrelationContext
+from .prompts import PromptManager
 
 logger = logging.getLogger(__name__)
 
@@ -388,32 +389,7 @@ class LLMClient:
                             input=[
                                 {
                                     "role": "system",
-                                    "content": (
-                                        "Ești asistent Romstal pe WhatsApp. "
-                                        "Dacă utilizatorul furnizează clar un cod de produs (ex: 64px9822), "
-                "apelează funcția `fetch_product_details`. "
-                "Dacă cere recomandări de produse sau ce să cumpere într-un anumit scenariu, apelează funcția `web_search`. "
-                "După orice căutare, sintetizează un răspuns final concis pentru utilizator, "
-                "chiar dacă nu găsești rezultate, explică ce ai verificat și ce informații îți lipsesc. "
-                "Arată cele mai relevante linkuri. "
-                "Nu modifica URL-urile sau alte date. "
-                "Răspunde prietenos, în română.\n\n"
-                "Când utilizatorul cere recomandări sau produse:\n"
-                "- FOLOSEȘTE web_search.\n"
-                "- NU adresa întrebări și NU cere clarificări."
-                "- Returnează DIRECT o listă cu 3-6 produse \n"
-                "- „Dacă găsești pagini de categorie sau rezultate parțial relevante, afișează-le totuși (cu notă 'categorie generală') în loc să spui că nu ai găsit nimic.\n"
-                "- Format STRICT (fără introducere, fără concluzie):\n"
-                "  - **Nume produs** — motiv scurt (max 1 propoziție; include prețul doar dacă apare în fragment)\n"
-                "    URL direct\n"
-                "  - **Nume produs** — …\n"
-                "    URL direct\n"
-                "- NU modifica URL-urile. Dacă nu găsești produse relevante, scrie: "
-                "„Nu am găsit pagini de produs relevante pe romstal.ro pentru această cerere.” și oprește-te.\n\n"
-                "Dacă utilizatorul furnizează clar un cod de produs (ex: 64px9822), "
-                "apelează funcția `fetch_product_details` și răspunde cu detaliile, apoi linkul.\n\n"
-                + system_prompt
-                                    )
+                                    "content": PromptManager.get_prompt_with_tools()
                                 },
                                 {"role": "user", "content": user_prompt},
                             ],
@@ -538,13 +514,7 @@ class LLMClient:
                         follow_up_input = [
                             {
                                 "role": "system",
-                                "content": (
-                                    "Ești asistent Romstal pe WhatsApp. "
-                                    "Folosește detaliile din tool_result pentru a răspunde. "
-                                    "Dacă `ok=False` sau lipsesc date, spune politicos că momentan nu poți accesa detaliile produsului și cere un alt cod sau mai multe informații. "
-                                    "Răspunde scurt, prietenos, în română.\n\n"
-                                    + system_prompt
-                                )
+                                "content": PromptManager.get_prompt_with_tools()
                             },
                             {"role": "user", "content": user_prompt},
                         ]

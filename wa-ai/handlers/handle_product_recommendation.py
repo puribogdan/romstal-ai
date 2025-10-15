@@ -14,6 +14,9 @@ from app.llm import llm_client
 from app.settings import settings
 from app.outbound import n8n_client
 
+# Import centralized prompt management
+from app.prompts import PromptManager
+
 # Import correlation tracking
 from app.correlation import (
     generate_correlation_id,
@@ -355,22 +358,8 @@ class ProductRecommendationHandler:
 
             hist_context = "\n".join(context_lines)
 
-            # Create system prompt for product recommendations
-            system_prompt = (
-                "Ești un asistent Romstal prietenos și util pe WhatsApp.\n"
-                "Poți recomanda produse Romstal când utilizatorii întreabă despre categorii, bugete sau caracteristici.\n"
-                "Răspunde în română, natural și conversațional.\n"
-                "Poți purta discuții casual și răspunde la întrebări personale simple, dar rolul tău principal este să ajuți utilizatorii cu informații despre Romstal, produse, servicii, program, livrare și alte detalii utile.\n"
-                "Fii prietenos, natural și adaptabil.\n"
-                "Important:\n"
-                "- Nu propune acțiuni precum adăugarea produselor în stoc, efectuarea comenzilor, programări sau alte procese operative.\n"
-                "- Nu face follow-up pentru a oferi servicii sau a iniția alte conversații.\n"
-                "- Poți face follow-up doar despre produsul sau subiectul discutat (ex: recomandări similare, specificații, întreținere, garanție etc.).\n"
-                "- Menține un ton profesionist, empatic și prietenos, ca un consultant Romstal care vorbește relaxat, dar informat.\n"
-                "- Când recomanzi produse, include informații clare despre preț, disponibilitate și link-uri către romstal.ro.\n"
-                "- Dacă utilizatorul specifică un cod de produs, folosește funcția fetch_product_details.\n"
-                "- Dacă utilizatorul cere recomandări generale, folosește funcția search_products_romstal.\n"
-            )
+            # Use the unified system prompt
+            system_prompt = PromptManager.get_unified_prompt()
 
             # Create user prompt with context
             user_prompt = (
