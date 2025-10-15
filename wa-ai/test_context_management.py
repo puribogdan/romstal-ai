@@ -1,200 +1,155 @@
 #!/usr/bin/env python3
 """
-Test script for product link context management functionality.
-This script tests the core context management features without requiring external dependencies.
+Test script for simplified product recommendation functionality.
+This script tests the basic product lookup features without context storage.
 """
 
 import sys
 import os
 import asyncio
-from datetime import datetime, timezone, timedelta
-from typing import Optional
 from unittest.mock import Mock, MagicMock
 
 # Add the wa-ai directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'wa-ai'))
 
-from app.supa import SupabaseClient
+from handlers.handle_product_recommendation import ProductRecommendationHandler
 
 
-class MockSupabaseClient(SupabaseClient):
+class MockSupabaseClient:
     """Mock Supabase client for testing without database dependencies."""
 
     def __init__(self):
-        # Don't call parent __init__ to avoid database connections
-        self._client = None
-        self._table = "wa_messages"
-        self.max_retries = 3
-        self.retry_delay = 0.5
-        self._cleanup_counter = 0
         self.test_data = {}
 
-    def store_product_link_context(self, session_id: int, phone_number: str, product_links: list, message_insert_id: int) -> bool:
-        """Mock implementation for testing."""
-        key = f"context_{phone_number}_{session_id}"
-        self.test_data[key] = {
-            "session_id": session_id,
-            "phone_number": phone_number,
-            "product_links": product_links,
-            "message_insert_id": message_insert_id,
-            "stored_at": datetime.now(timezone.utc)
+    def get_message_by_id(self, message_id: int):
+        """Mock message retrieval."""
+        return {
+            "id": message_id,
+            "wa_from": "+40712345678",
+            "wa_text": "Show me product 64px9822",
+            "wa_timestamp": "2024-01-01T10:00:00Z",
+            "inserted_at": "2024-01-01T10:00:00Z"
         }
-        print(f"[TEST] Stored {len(product_links)} product links for {phone_number}")
-        return True
 
-    def get_product_link_context(self, phone_number: str, session_id: Optional[int] = None) -> list:
-        """Mock implementation for testing."""
-        contexts = []
-        for key, data in self.test_data.items():
-            if phone_number in key and data["phone_number"] == phone_number:
-                if session_id is None or data["session_id"] == session_id:
-                    # Create separate context records for each product link
-                    for link in data["product_links"]:
-                        contexts.append({
-                            "conversation_session_id": data["session_id"],
-                            "phone_number": data["phone_number"],
-                            "product_url": link.get("url", ""),
-                            "product_code": link.get("code", ""),
-                            "product_name": link.get("name", ""),
-                            "displayed_at": data["stored_at"].isoformat(),
-                            "message_insert_id": data["message_insert_id"],
-                            "context_expires_at": (data["stored_at"] + timedelta(hours=24)).isoformat()
-                        })
-        print(f"[TEST] Retrieved {len(contexts)} product link contexts for {phone_number}")
-        return contexts
+    def get_message_history(self, phone: str):
+        """Mock message history."""
+        return [
+            {
+                "wa_from": phone,
+                "wa_text": "Hello",
+                "wa_timestamp": "2024-01-01T09:00:00Z",
+                "inserted_at": "2024-01-01T09:00:00Z",
+                "direction": "inbound"
+            }
+        ]
 
-    def format_product_context_for_prompt(self, context_records: list) -> str:
-        """Test the context formatting functionality."""
-        if not context_records:
-            return ""
+    def get_or_create_conversation_session(self, phone: str, system_prompt: str):
+        """Mock session creation."""
+        return {
+            "id": 12345,
+            "phone_number": phone,
+            "system_prompt": system_prompt,
+            "full_conversation": [],
+            "context_messages": [],
+            "message_count": 0
+        }
 
-        context_lines = []
-        context_lines.append("Produse discutate anterior în conversație:")
-
-        for i, record in enumerate(context_records[:5], 1):  # Limit to last 5 products
-            product_name = record.get("product_name", "Produs necunoscut")
-            product_url = record.get("product_url", "")
-            product_code = record.get("product_code", "")
-
-            context_line = f"{i}. {product_name}"
-            if product_code:
-                context_line += f" (cod: {product_code})"
-            if product_url:
-                context_line += f" - {product_url}"
-
-            context_lines.append(context_line)
-
-        context_lines.append("")  # Add spacing
-        return "\n".join(context_lines)
+    def insert_outbound_message(self, phone: str, message: str, raw_data: dict = None):
+        """Mock outbound message insertion."""
+        return {"id": 999, "wa_from": phone, "wa_text": message}
 
 
-async def test_context_management():
-    """Test the context management functionality."""
-    print("Testing Product Link Context Management")
+class MockLLMClient:
+    """Mock LLM client for testing."""
+
+    async def call_llm_with_tools(self, system_prompt: str, user_prompt: str, correlation_id: str = None):
+        """Mock LLM response with product details."""
+        return "Am găsit produsul: Teava PPR 20mm, preț 15.50 RON. Disponibil în stoc. https://www.romstal.ro/teava-ppr-20mm", [
+            {
+                "function": "fetch_product_details",
+                "args": {"code": "64px9822"},
+                "result": {
+                    "ok": True,
+                    "code": "64px9822",
+                    "data": {
+                        "info": {
+                            "product": "Teava PPR 20mm",
+                            "price": "15.50 RON"
+                        }
+                    }
+                }
+            }
+        ]
+
+
+class MockN8NClient:
+    """Mock N8N client for testing."""
+
+    async def send_to_n8n(self, phone: str, message: str, correlation_id: str = None):
+        """Mock N8N webhook call."""
+        return {"success": True, "message_id": "n8n_123"}
+
+
+async def test_product_recommendation():
+    """Test the simplified product recommendation functionality."""
+    print("Testing Simplified Product Recommendation")
     print("=" * 50)
 
-    # Create mock client
-    client = MockSupabaseClient()
+    # Create mock clients
+    mock_supa = MockSupabaseClient()
+    mock_llm = MockLLMClient()
+    mock_n8n = MockN8NClient()
+
+    # Create handler with mock clients
+    handler = ProductRecommendationHandler()
+    handler.db_client = mock_supa
+    handler.llm_client = mock_llm
+    handler.n8n_client = mock_n8n
 
     # Test data
-    test_phone = "+40712345678"
-    test_session_id = 12345
-    test_message_id = 67890
+    test_insert_id = 67890
 
-    # Sample product links (using ASCII-only characters for Windows compatibility)
-    product_links = [
-        {
-            "url": "https://www.romstal.ro/teava-ppr-20mm",
-            "code": "TPP20",
-            "name": "Teava PPR 20mm"
-        },
-        {
-            "url": "https://www.romstal.ro/fiting-ppr-cot-90",
-            "code": "FPC90",
-            "name": "Fiting PPR cot 90 grade"
-        }
-    ]
+    # Test product recommendation processing
+    print("\nTest 1: Product Recommendation Processing")
+    result = await handler.handle_product_recommendation(insert_id=test_insert_id)
 
-    # Test 1: Store product link context
-    print("\nTest 1: Store Product Link Context")
-    success = client.store_product_link_context(
-        session_id=test_session_id,
-        phone_number=test_phone,
-        product_links=product_links,
-        message_insert_id=test_message_id
-    )
-
-    if success:
-        print("PASS: Product link context stored successfully")
+    if result.get("success"):
+        print("PASS: Product recommendation processed successfully")
+        print(f"   - Phone: {result.get('phone')}")
+        print(f"   - Response length: {len(result.get('ai_response', ''))}")
+        print(f"   - Function calls: {len(result.get('function_calls', []))}")
     else:
-        print("FAIL: Failed to store product link context")
+        print(f"FAIL: Product recommendation failed: {result.get('error')}")
         return False
 
-    # Test 2: Retrieve product link context
-    print("\nTest 2: Retrieve Product Link Context")
-    contexts = client.get_product_link_context(test_phone, test_session_id)
-
-    if len(contexts) == len(product_links):
-        print(f"PASS: Retrieved {len(contexts)} product link contexts successfully")
-        for i, context in enumerate(contexts):
-            print(f"   - {context.get('product_name', 'Unknown')} ({context.get('product_code', 'No code')})")
+    # Test phone number extraction
+    print("\nTest 2: Phone Number Extraction")
+    phone = await handler._extract_phone_number(test_insert_id)
+    if phone == "+40712345678":
+        print("PASS: Phone number extracted correctly")
     else:
-        print(f"FAIL: Expected {len(product_links)} contexts, got {len(contexts)}")
+        print(f"FAIL: Expected '+40712345678', got '{phone}'")
         return False
 
-    # Test 3: Format context for LLM prompt
-    print("\nTest 3: Format Context for LLM Prompt")
-    formatted_context = client.format_product_context_for_prompt(contexts)
-
-    if formatted_context and "Produse discutate anterior" in formatted_context:
-        print("PASS: Context formatted successfully for LLM prompt")
-        print("Formatted context preview:")
-        print("-" * 30)
-        # Safely print the formatted context by encoding it
-        try:
-            safe_context = formatted_context[:200] + "..." if len(formatted_context) > 200 else formatted_context
-            print(safe_context)
-        except UnicodeEncodeError:
-            print("[Context contains Romanian characters - formatting works correctly]")
-        print("-" * 30)
+    # Test message and context retrieval
+    print("\nTest 3: Message and Context Retrieval")
+    message_data = await handler._get_message_and_context(test_insert_id, phone)
+    if message_data and "current_message" in message_data:
+        print("PASS: Message and context retrieved successfully")
+        print(f"   - Current message: {message_data['current_message'][:50]}...")
     else:
-        print("FAIL: Failed to format context for LLM prompt")
+        print("FAIL: Failed to retrieve message and context")
         return False
 
-    # Test 4: Test context expiry (simulate expired context)
-    print("\nTest 4: Context Expiry Handling")
-    expired_contexts = []
-    for context in contexts:
-        # Simulate expired context by modifying the expiry date
-        context["context_expires_at"] = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-        expired_contexts.append(context)
-
-    # Test formatting with expired contexts (should still work but may be filtered in real implementation)
-    expired_formatted = client.format_product_context_for_prompt(expired_contexts)
-    if expired_formatted:
-        print("PASS: Expired context formatting works")
-    else:
-        print("FAIL: Expired context formatting failed")
-        return False
-
-    # Test 5: Test empty context handling
-    print("\nTest 5: Empty Context Handling")
-    empty_formatted = client.format_product_context_for_prompt([])
-    if empty_formatted == "":
-        print("PASS: Empty context handled correctly")
-    else:
-        print("FAIL: Empty context not handled correctly")
-        return False
-
-    print("\nAll tests passed! Context management functionality is working correctly.")
+    print("\nAll tests passed! Product recommendation functionality is working correctly.")
     return True
 
 
 if __name__ == "__main__":
     try:
-        success = asyncio.run(test_context_management())
+        success = asyncio.run(test_product_recommendation())
         if success:
-            print("\nContext management implementation is ready for production!")
+            print("\nProduct recommendation implementation is ready for production!")
             sys.exit(0)
         else:
             print("\nSome tests failed. Please check the implementation.")

@@ -34,38 +34,6 @@ class MockSupabaseClient(SupabaseClient):
         self.test_data = {}
         self.message_counter = 1000
 
-    def store_product_link_context(self, session_id: int, phone_number: str, product_links: list, message_insert_id: int) -> bool:
-        """Mock implementation for testing."""
-        key = f"context_{phone_number}_{session_id}"
-        self.test_data[key] = {
-            "session_id": session_id,
-            "phone_number": phone_number,
-            "product_links": product_links,
-            "message_insert_id": message_insert_id,
-            "stored_at": datetime.now(timezone.utc)
-        }
-        print(f"[TEST] Stored {len(product_links)} product links for {phone_number}")
-        return True
-
-    def get_product_link_context(self, phone_number: str, session_id: Optional[int] = None) -> list:
-        """Mock implementation for testing."""
-        contexts = []
-        for key, data in self.test_data.items():
-            if phone_number in key and data["phone_number"] == phone_number:
-                if session_id is None or data["session_id"] == session_id:
-                    for link in data["product_links"]:
-                        contexts.append({
-                            "conversation_session_id": data["session_id"],
-                            "phone_number": data["phone_number"],
-                            "product_url": link.get("url", ""),
-                            "product_code": link.get("code", ""),
-                            "product_name": link.get("name", ""),
-                            "displayed_at": data["stored_at"].isoformat(),
-                            "message_insert_id": data["message_insert_id"],
-                            "context_expires_at": (data["stored_at"] + timedelta(hours=24)).isoformat()
-                        })
-        print(f"[TEST] Retrieved {len(contexts)} product link contexts for {phone_number}")
-        return contexts
 
     def get_message_by_id(self, message_id: int, correlation_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Mock message retrieval."""
@@ -350,78 +318,6 @@ class ComprehensiveTestSuite:
 
         return all_passed
 
-    async def test_context_management_product_links(self):
-        """Test 3: Context management for product links."""
-        print("\nTest 3: Context Management for Product Links")
-        print("=" * 60)
-
-        try:
-            phone = "+40712345678"
-            session_id = 12345
-            message_id = 1001
-
-            # Test product links storage
-            product_links = [
-                {
-                    "url": "https://www.romstal.ro/teava-ppr-20mm",
-                    "code": "TPP20",
-                    "name": "Teava PPR 20mm"
-                },
-                {
-                    "url": "https://www.romstal.ro/fiting-ppr-cot-90",
-                    "code": "FPC90",
-                    "name": "Fiting PPR cot 90 grade"
-                }
-            ]
-
-            # Store context
-            stored = self.mock_supa.store_product_link_context(
-                session_id, phone, product_links, message_id
-            )
-
-            if stored:
-                print(f"PASS: Product link context stored successfully")
-            else:
-                print(f"FAIL: Failed to store product link context")
-                return False
-
-            # Retrieve context
-            contexts = self.mock_supa.get_product_link_context(phone, session_id)
-
-            if len(contexts) == len(product_links):
-                print(f"PASS: Retrieved {len(contexts)} product link contexts")
-
-                # Verify context structure
-                for i, context in enumerate(contexts):
-                    required_fields = ["product_url", "product_code", "product_name", "context_expires_at"]
-                    missing_fields = [field for field in required_fields if field not in context]
-
-                    if missing_fields:
-                        print(f"FAIL: Context {i+1} missing fields: {missing_fields}")
-                        return False
-
-                    print(f"   - {context.get('product_name')} ({context.get('product_code')})")
-
-                print(f"PASS: All context records have proper structure")
-            else:
-                print(f"FAIL: Expected {len(product_links)} contexts, got {len(contexts)}")
-                return False
-
-            # Test context formatting for LLM
-            formatted_context = self.mock_supa.format_product_context_for_prompt(contexts)
-
-            if formatted_context and "Produse discutate anterior" in formatted_context:
-                print(f"PASS: Context formatted successfully for LLM prompt")
-                print(f"   Preview: {formatted_context[:100]}...")
-            else:
-                print(f"FAIL: Context formatting failed")
-                return False
-
-            return True
-
-        except Exception as e:
-            print(f"FAIL: Exception during context management test: {e}")
-            return False
 
     async def test_llm_tool_integration(self):
         """Test 4: LLM tool integration and response formatting."""
@@ -573,14 +469,7 @@ class ComprehensiveTestSuite:
                 print(f"FAIL: Message insertion failed")
                 return False
 
-            # Test context cleanup
-            cleanup_count = self.mock_supa.cleanup_expired_context(phone)
-
-            if isinstance(cleanup_count, int):
-                print(f"PASS: Context cleanup completed (removed {cleanup_count} records)")
-            else:
-                print(f"FAIL: Context cleanup returned invalid result: {cleanup_count}")
-                return False
+            # Context cleanup removed - simplified testing
 
             # Test conversation session management
             session = self.mock_supa.get_or_create_conversation_session(phone, "Test prompt")
@@ -615,7 +504,6 @@ class ComprehensiveTestSuite:
         test_methods = [
             self.test_product_search_different_categories,
             self.test_message_handler_integration,
-            self.test_context_management_product_links,
             self.test_llm_tool_integration,
             self.test_error_handling_edge_cases,
             self.test_database_operations_cleanup

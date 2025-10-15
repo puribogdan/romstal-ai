@@ -612,9 +612,6 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
         cleanup_counter = getattr(supabase_client, '_cleanup_counter', 0)
         if cleanup_counter >= 10:
             try:
-                expired_count = supabase_client.cleanup_expired_context(phone)
-                if expired_count > 0:
-                    logger.info(f"[CLEANUP] Cleaned up {expired_count} expired product link contexts for {phone}")
                 supabase_client._cleanup_counter = 0
             except Exception as e:
                 logger.warning(f"[CLEANUP] Error during context cleanup: {e}")
@@ -651,17 +648,7 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
         for m in recent_messages:
             hist_lines.append(f"- {m['from']}: {m['text']}")
 
-        # Add product link context for follow-up questions
-        product_context = ""
-        if session:
-            try:
-                # Get active product link context for this conversation
-                context_records = supabase_client.get_product_link_context(phone, int(session["id"]))
-                if context_records:
-                    product_context = supabase_client.format_product_context_for_prompt(context_records)
-                    logger.info(f"[CONTEXT] Retrieved {len(context_records)} product link contexts for follow-up questions")
-            except Exception as e:
-                logger.warning(f"[CONTEXT] Error retrieving product link context: {e}")
+        # Product context removed - using simple product lookup
 
         hist_context = "\n".join(hist_lines)
 
@@ -681,10 +668,8 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
 
         user_prompt = (
             f"Context conversație (include apeluri funcții anterioare):\n{hist_context}\n\n"
-            f"{product_context}"
             f"Mesajul utilizatorului: {user_message_to_respond}\n\n"
-            "Generează un răspuns helpful și natural în română, folosind contextul complet de mai sus. "
-            "Dacă utilizatorul întreabă despre produse menționate anterior, poți referi la acestea și oferi informații suplimentare."
+            "Generează un răspuns helpful și natural în română, folosind contextul complet de mai sus."
         )
 
         # Use intelligent LLM call based on message analysis

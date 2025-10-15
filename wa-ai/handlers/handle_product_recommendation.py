@@ -165,63 +165,11 @@ class ProductRecommendationHandler:
                     correlation_id
                 )
 
-                # Step 5: Extract and store product link context
+
+                # Step 5: Save outbound message to database
                 log_with_correlation(
                     logger.info,
-                    f"Step 5: Extracting and storing product link context for phone: {phone}",
-                    correlation_id
-                )
-
-                # Extract product links from the AI response
-                product_links = self._extract_product_links_from_response(ai_response, function_calls)
-
-                # Store product link context if we have a valid session and product links
-                if product_links:
-                    try:
-                        # Get or create conversation session for context storage
-                        session = self.db_client.get_or_create_conversation_session(phone, "")
-                        if session:
-                            context_stored = self.db_client.store_product_link_context(
-                                session_id=int(session["id"]),
-                                phone_number=phone,
-                                product_links=product_links,
-                                message_insert_id=insert_id
-                            )
-                            if context_stored:
-                                log_with_correlation(
-                                    logger.info,
-                                    f"Step 5: Successfully stored {len(product_links)} product link contexts",
-                                    correlation_id
-                                )
-                            else:
-                                log_with_correlation(
-                                    logger.warning,
-                                    f"Step 5: Failed to store product link contexts",
-                                    correlation_id
-                                )
-                        else:
-                            log_with_correlation(
-                                logger.warning,
-                                f"Step 5: Could not get/create conversation session for context storage",
-                                correlation_id
-                            )
-                    except Exception as e:
-                        log_with_correlation(
-                            logger.error,
-                            f"Step 5: Error storing product link context: {e}",
-                            correlation_id
-                        )
-
-                log_with_correlation(
-                    logger.info,
-                    f"Step 5 completed: Product link context processed for phone: {phone}",
-                    correlation_id
-                )
-
-                # Step 6: Save outbound message to database
-                log_with_correlation(
-                    logger.info,
-                    f"Step 6: Saving outbound message for phone: {phone}",
+                    f"Step 5: Saving outbound message for phone: {phone}",
                     correlation_id
                 )
                 db_result = await self._save_outbound_message(phone, ai_response, {
@@ -229,8 +177,7 @@ class ProductRecommendationHandler:
                     "insert_id": insert_id,
                     "n8n_result": n8n_result,
                     "function_calls": function_calls,
-                    "correlation_id": correlation_id,
-                    "product_links_count": len(product_links) if product_links else 0
+                    "correlation_id": correlation_id
                 })
                 log_with_correlation(
                     logger.info,
@@ -402,86 +349,8 @@ class ProductRecommendationHandler:
             logger.error(f"[PRODUCT-REC] Error sending N8N response: {e}")
             return {"error": str(e)}
 
-    def _extract_product_links_from_response(self, ai_response: str, function_calls: Optional[List] = None) -> List[Dict[str, Any]]:
-        """Extract product links and information from AI response and function calls."""
-        product_links = []
 
-        try:
-            # Extract URLs from the AI response text
-            import re
-            url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
-            urls = re.findall(url_pattern, ai_response)
 
-            # Filter for Romstal URLs and extract product information
-            for url in urls:
-                if 'romstal.ro' in url:
-                    # Try to extract product code from URL if present
-                    product_code = self._extract_product_code_from_url(url)
-
-                    # Try to get product name from function calls if available
-                    product_name = self._extract_product_name_from_function_calls(function_calls, product_code)
-
-                    product_links.append({
-                        "url": url,
-                        "code": product_code,
-                        "name": product_name
-                    })
-
-            logger.info(f"[PRODUCT-REC] Extracted {len(product_links)} product links from response")
-            return product_links
-
-        except Exception as e:
-            logger.error(f"[PRODUCT-REC] Error extracting product links: {e}")
-            return []
-
-    def _extract_product_code_from_url(self, url: str) -> str:
-        """Extract product code from Romstal URL if present."""
-        try:
-            # Look for patterns like /product/code or code=CODE in URL
-            import re
-
-            # Pattern 1: /product/code format
-            product_pattern = r'/product/([^/?]+)'
-            match = re.search(product_pattern, url)
-            if match:
-                return match.group(1)
-
-            # Pattern 2: code=CODE parameter
-            code_pattern = r'[?&]code=([^&]+)'
-            match = re.search(code_pattern, url)
-            if match:
-                return match.group(1)
-
-            return ""
-        except Exception:
-            return ""
-
-    def _extract_product_name_from_function_calls(self, function_calls: Optional[List], product_code: str) -> str:
-        """Extract product name from function call results."""
-        if not function_calls or not product_code:
-            return ""
-
-        try:
-            for call in function_calls:
-                if call.get("function") == "fetch_product_details":
-                    result = call.get("result", {})
-                    if result.get("ok") and result.get("code") == product_code:
-                        data = result.get("data", {})
-                        if isinstance(data, dict):
-                            info = data.get("info", {})
-                            return info.get("product", "")
-
-                elif call.get("function") == "search_products_romstal":
-                    result = call.get("result", {})
-                    if result.get("ok"):
-                        products = result.get("products", [])
-                        for product in products:
-                            if product.get("url", "").find(product_code) != -1:
-                                return product.get("name", "")
-
-            return ""
-        except Exception:
-            return ""
 
     async def _save_outbound_message(
         self,
