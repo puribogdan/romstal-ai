@@ -4,7 +4,7 @@ supabase
 python-dotenv
 httpx
 requests
-openai
+openai==1.52.1
 pydantic
 pydantic-settings
 mistralai
