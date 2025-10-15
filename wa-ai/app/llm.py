@@ -384,6 +384,12 @@ class LLMClient:
 
                         logger.info(f"[OpenAI] [{correlation_id}] Attempt {attempt + 1}/{max_retries} with search_context_size={current_search_context_size}, max_tokens={current_max_tokens}")
 
+                        # Determine appropriate reasoning effort based on tools
+                        has_web_search = any(tool.get("type") == "web_search" for tool in current_tools)
+                        reasoning_effort = "medium" if has_web_search else "minimal"
+
+                        logger.info(f"[OpenAI] [{correlation_id}] Using reasoning effort: {reasoning_effort} (web_search: {has_web_search})")
+
                         response = self.client.responses.create(
                             model=settings.openai_model,
                             input=[
@@ -396,7 +402,7 @@ class LLMClient:
                             tools=current_tools,
                             tool_choice="auto",
                             max_output_tokens=current_max_tokens,
-                            reasoning={"effort": "minimal"}  # Use minimal reasoning to save tokens for response
+                            reasoning={"effort": reasoning_effort}
                         )
 
                         # Check if response was truncated due to token limit - short-circuit for immediate handling
@@ -533,13 +539,20 @@ class LLMClient:
                         if has_web_search:
                             logger.info(f"[OpenAI] [{correlation_id}] Web search tool available for follow-up call")
 
+                        # Determine appropriate reasoning effort for follow-up call
+                        follow_up_tools = self.OPENAI_TOOLS.copy()
+                        has_web_search_followup = any(tool.get("type") == "web_search" for tool in follow_up_tools)
+                        follow_up_reasoning_effort = "medium" if has_web_search_followup else "minimal"
+
+                        logger.info(f"[OpenAI] [{correlation_id}] Follow-up call using reasoning effort: {follow_up_reasoning_effort}")
+
                         follow_up_response = self.client.responses.create(
                             model=settings.openai_model,
                             input=follow_up_input,
-                            tools=self.OPENAI_TOOLS,
+                            tools=follow_up_tools,
                             previous_response_id=response.id,  # Thread the conversation
                             max_output_tokens=4000,  # Increased to handle function call responses properly
-                            reasoning={"effort": "minimal"}  # Use minimal reasoning to save tokens for actual response
+                            reasoning={"effort": follow_up_reasoning_effort}
                         )
 
                         logger.info(f"[DEBUG] Follow-up response ID: {follow_up_response.id}")
@@ -551,13 +564,17 @@ class LLMClient:
                                 logger.warning(f"[OpenAI] [{correlation_id}] Follow-up response also truncated, trying with higher token limit")
                                 # Try one more time with even higher token limit
                                 try:
+                                    # Use appropriate reasoning effort for final attempt
+                                    has_web_search_final = any(tool.get("type") == "web_search" for tool in self.OPENAI_TOOLS)
+                                    final_reasoning_effort = "medium" if has_web_search_final else "minimal"
+
                                     final_response = self.client.responses.create(
                                         model=settings.openai_model,
                                         input=follow_up_input,
                                         tools=self.OPENAI_TOOLS,
                                         previous_response_id=response.id,
                                         max_output_tokens=6000,  # Higher limit for final attempt
-                                        reasoning={"effort": "minimal"}
+                                        reasoning={"effort": final_reasoning_effort}
                                     )
                                     final_text = final_response.output_text
                                     if final_text:
