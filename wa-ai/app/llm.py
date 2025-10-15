@@ -379,7 +379,7 @@ class LLMClient:
                                     tool["search_context_size"] = "medium"
                                     break
 
-                        current_max_tokens = 1200 + (attempt * 400)  # Increase by 400 on retry
+                        current_max_tokens = 6000 + (attempt * 400)  # Increase by 400 on retry
 
                         logger.info(f"[OpenAI] [{correlation_id}] Attempt {attempt + 1}/{max_retries} with search_context_size={current_search_context_size}, max_tokens={current_max_tokens}")
 
