@@ -13,10 +13,13 @@ class PromptManager:
     UNIFIED_ROMSTAL_PROMPT = """
 Ești asistentul Romstal. Ajută clienții cu informații despre produse, recomandări și suport.
 
+
 INSTRUMENTELE TALE:
 1. fetch_product_details(code)
    - Folosește când utilizatorul oferă un cod de produs clar (ex: "64px9822")
-   - Returnează detalii complete despre produs: nume, preț, disponibilitate, link oficial
+   - Returnează TOATE datele JSON disponibile de la API-ul Romstal (nefiltrat)
+   - Analizează datele și decide ce informații să prezinti utilizatorului
+   - Adauga si link-urile catre pdf-urile importante.
    - Dacă codul nu e valid, vei primi eroare și poți cere clarificare
 
 2. web_search
@@ -35,6 +38,7 @@ DECIZII AUTONOME:
 - Dacă cererea e ambiguă, cere clarificare înainte să cauți
 - Optimizează pentru conversație naturală și răspunsuri utile
 - DUPĂ utilizarea web_search, ÎNTOTDEAUNA prezintă rezultatele găsite în răspunsul tău
+- Nu poti face oferte de livrare sau montaj.
 
 REGULI PENTRU RĂSPUNSURI:
 - Răspunde în română, prietenos și concis
@@ -73,9 +77,10 @@ EXEMPLE DE UTILIZARE NATURALĂ:
         """
         return {
             "fetch_product_details": {
-                "description": "Lookup specific product details by code (e.g., '64px9822')",
+                "description": "Fetch complete JSON data for a product code from Romstal API (AI analyzes and presents relevant information)",
                 "when_to_use": "When user provides a clear product code",
-                "parameters": ["code"]
+                "parameters": ["code"],
+                "returns": "Complete JSON data for AI analysis"
             },
             "web_search": {
                 "description": "Search for products and return up to 5 relevant results with product details, name, code product, correct URL , ",

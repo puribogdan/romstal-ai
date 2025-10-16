@@ -598,7 +598,15 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
                         func_name = func.get("function", "unknown")
                         func_args = func.get("args", {})
                         func_result = func.get("result", {})
-                        hist_lines.append(f"- [Function: {func_name}({func_args}) -> {func_result.get('ok', False)}]")
+
+                        # Handle both dictionary and string results
+                        if isinstance(func_result, dict):
+                            success_status = func_result.get('ok', False)
+                        else:
+                            # For string results (like product service), assume success if result is not an error message
+                            success_status = not str(func_result).startswith("Eroare") and not str(func_result).startswith("Nu am găsit")
+
+                        hist_lines.append(f"- [Function: {func_name}({func_args}) -> {success_status}]")
 
         # Add regular message history
         for m in recent_messages:

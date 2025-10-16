@@ -43,7 +43,7 @@ class LLMClient:
         },
              
             # Optional: can add filters if needed
-             "filters": {"allowed_domains": ["www.romstal.ro", "romstal.ro", "romstalpartener.ro" , "www.romstalpartener.ro", "shop.romstal.ro", "romstal.md"]},
+            "filters": {"allowed_domains": ["www.romstal.ro", "romstal.ro", "romstalpartener.ro" , "www.romstalpartener.ro", "shop.romstal.ro", "romstal.md"]},
             #"filters": {"allowed_domains": ["emag.ro", "www.emag.ro"]},
             "search_context_size": "medium"
         }
@@ -354,21 +354,8 @@ class LLMClient:
         Returns:
             String containing product information or error message
         """
-        if not code or not code.strip():
-            return "Cod produs invalid sau lipsă."
-
-        correlation_id = generate_correlation_id()
-        with CorrelationContext(correlation_id):
-            try:
-                logger.info(f"[PRODUCT] [{correlation_id}] Fetching details for code: {code}")
-
-                # Here you would implement the actual product lookup logic
-                # For now, return a placeholder response
-                return f"Am găsit produsul cu codul {code}. Aceasta este o implementare placeholder - conectarea la baza de date Romstal va fi implementată separat."
-
-            except Exception as e:
-                logger.exception(f"[PRODUCT] [{correlation_id}] Error fetching product {code}: {e}")
-                return f"Eroare la căutarea produsului {code}. Te rog să încerci din nou."
+        from .product_service import product_service
+        return await product_service.fetch_product_details(code)
 
 
 # Global LLM client instance
