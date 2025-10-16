@@ -50,9 +50,9 @@ class LLMClient:
         },
         {
             "type": "web_search",
-            "filters": {"allowed_domains": ["romstal.ro", "www.romstal.ro"]},
+            "filters": {"allowed_domains": ["www.romstal.ro"]},
             "user_location": {"type": "approximate", "country": "RO", "city": "București"},
-            "search_context_size": "low"
+            "search_context_size": "medium"
         }
     ]
 
@@ -405,94 +405,64 @@ class LLMClient:
                 has_web_search = any(tool.get("type") == "web_search" for tool in self.OPENAI_TOOLS)
 
                 # Use different reasoning effort based on tools
-                reasoning_effort = "medium" if has_web_search else "minimal"
+                reasoning_effort = "low" if has_web_search else "minimal"
 
                 if has_web_search:
                     logger.info(f"[OpenAI] [{correlation_id}] Web search tool available, using medium reasoning effort")
                     logger.info(f"[OpenAI] [{correlation_id}] Web search tool config: {json.dumps([tool for tool in self.OPENAI_TOOLS if tool.get('type') == 'web_search'], indent=2)}")
 
-                # Retry configuration for token ceiling issues
-                max_retries = 2
-                current_search_context_size = "medium"  # Start with medium for better results
-                response = None
+                # Single API call with maximum token limit for web search
+                current_search_context_size = "medium"  # Use medium for web search to avoid truncation
 
-                for attempt in range(max_retries):
-                    try:
-                        # Update tools with current search context size if web search is used
-                        current_tools = self.OPENAI_TOOLS.copy()
-                        if has_web_search:
-                            # Update the web_search tool with current context size
-                            for tool in current_tools:
-                                if tool.get("type") == "web_search":
-                                    tool["search_context_size"] = current_search_context_size
-                                    logger.info(f"[OpenAI] [{correlation_id}] Using search_context_size: {current_search_context_size}")
-                                    break
+                try:
+                    # Update tools with current search context size if web search is used
+                    current_tools = self.OPENAI_TOOLS.copy()
+                    if has_web_search:
+                        # Update the web_search tool with current context size
+                        for tool in current_tools:
+                            if tool.get("type") == "web_search":
+                                tool["search_context_size"] = current_search_context_size
+                                logger.info(f"[OpenAI] [{correlation_id}] Using search_context_size: {current_search_context_size}")
+                                break
 
-                        current_max_tokens = 6000 + (attempt * 400)  # Increase by 400 on retry
+                    # Use maximum token limit for web search to prevent truncation
+                    current_max_tokens = 20000  # Maximum to prevent any truncation
 
-                        logger.info(f"[OpenAI] [{correlation_id}] Attempt {attempt + 1}/{max_retries} with search_context_size={current_search_context_size}, max_tokens={current_max_tokens}")
+                    logger.info(f"[OpenAI] [{correlation_id}] Single attempt with search_context_size={current_search_context_size}, max_tokens={current_max_tokens}")
 
-                        # Determine appropriate reasoning effort based on tools
-                        has_web_search = any(tool.get("type") == "web_search" for tool in current_tools)
-                        reasoning_effort = "medium" if has_web_search else "minimal"
+                    # Determine appropriate reasoning effort based on tools
+                    has_web_search = any(tool.get("type") == "web_search" for tool in current_tools)
+                    reasoning_effort = "medium" if has_web_search else "minimal"
 
-                        logger.info(f"[OpenAI] [{correlation_id}] Using reasoning effort: {reasoning_effort} (web_search: {has_web_search})")
-                        logger.info(f"[OpenAI] [{correlation_id}] Current tools web_search context_size: {[tool.get('search_context_size') for tool in current_tools if tool.get('type') == 'web_search']}")
+                    logger.info(f"[OpenAI] [{correlation_id}] Using reasoning effort: {reasoning_effort} (web_search: {has_web_search})")
+                    logger.info(f"[OpenAI] [{correlation_id}] Current tools web_search context_size: {[tool.get('search_context_size') for tool in current_tools if tool.get('type') == 'web_search']}")
 
-                        response = self.client.responses.create(
-                            model=settings.openai_model,
-                            input=[
-                                {
-                                    "role": "system",
-                                    "content": PromptManager.get_prompt_with_tools()
-                                },
-                                {"role": "user", "content": user_prompt},
-                            ],
-                            tools=current_tools,
-                            tool_choice="auto",
-                            max_output_tokens=current_max_tokens,
-                            reasoning={"effort": reasoning_effort}
-                        )
+                    response = self.client.responses.create(
+                        model=settings.openai_model,
+                        input=[
+                            {
+                                "role": "system",
+                                "content": PromptManager.get_unified_prompt()
+                            },
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        tools=current_tools,
+                        tool_choice="auto",
+                        max_output_tokens=current_max_tokens,
+                        reasoning={"effort": reasoning_effort}
+                    )
 
-                        # Check if response was truncated due to token limit - short-circuit for immediate handling
-                        if hasattr(response, 'incomplete_details') and response.incomplete_details:
-                            if response.incomplete_details.reason == "max_output_tokens":
-                                logger.warning(f"[OpenAI] [{correlation_id}] Response truncated due to max_output_tokens, attempt {attempt + 1}")
-                                if attempt < max_retries - 1:  # Not the last attempt
-                                    # Try with even higher token limit and minimal reasoning
-                                    current_max_tokens = min(current_max_tokens + 2000, 10000)  # Cap at 10k tokens
-                                    # Increase context size for retry attempts
-                                    if current_search_context_size == "medium":
-                                        current_search_context_size = "high"
-                                        logger.info(f"[OpenAI] [{correlation_id}] Retrying with higher token limit: {current_max_tokens} and increased context_size: {current_search_context_size}")
-                                    else:
-                                        logger.info(f"[OpenAI] [{correlation_id}] Retrying with higher token limit: {current_max_tokens}")
-                                    continue
-                                else:
-                                    logger.error(f"[OpenAI] [{correlation_id}] Final attempt failed due to max_output_tokens")
-                                    # Return concise fallback for partial results
-                                    fallback_text = "Am găsit informații. Pentru detalii complete, te rog să întrebi mai specific despre un produs anume."
-                                    return fallback_text, []
-                            else:
-                                logger.warning(f"[OpenAI] [{correlation_id}] Response incomplete for other reason: {response.incomplete_details.reason}")
-
-                        # Success - break out of retry loop
-                        break
-
-                    except Exception as e:
-                        logger.error(f"[OpenAI] [{correlation_id}] Attempt {attempt + 1} failed: {type(e).__name__}: {str(e)}")
-                        if attempt < max_retries - 1:
-                            logger.warning(f"[OpenAI] [{correlation_id}] Attempt {attempt + 1} failed: {e}, retrying...")
-                            await asyncio.sleep(self.retry_delay * (attempt + 1))  # Exponential backoff
-                            continue
+                    # Check if response was truncated - if so, return error (no retries)
+                    if hasattr(response, 'incomplete_details') and response.incomplete_details:
+                        if response.incomplete_details.reason == "max_output_tokens":
+                            logger.error(f"[OpenAI] [{correlation_id}] Response truncated due to max_output_tokens - no retries allowed")
+                            return "Răspunsul este prea lung. Te rog să întrebi mai specific despre un produs anume.", []
                         else:
-                            logger.error(f"[OpenAI] [{correlation_id}] All {max_retries} attempts failed")
-                            raise e
+                            logger.warning(f"[OpenAI] [{correlation_id}] Response incomplete for other reason: {response.incomplete_details.reason}")
 
-                # Ensure we have a response object
-                if response is None:
-                    logger.error(f"[OpenAI] [{correlation_id}] No response obtained after all retry attempts")
-                    return "Îmi pare rău, momentan nu pot procesa cererea. Te rog să încerci din nou mai târziu.", None
+                except Exception as e:
+                    logger.error(f"[OpenAI] [{correlation_id}] Single attempt failed: {type(e).__name__}: {str(e)}")
+                    raise e
 
                 logger.info(f"[DEBUG] Initial response ID: {response.id}")
                 logger.info(f"[DEBUG] Initial response output type: {type(response.output)}")
@@ -617,7 +587,7 @@ class LLMClient:
                         follow_up_input = [
                             {
                                 "role": "system",
-                                "content": PromptManager.get_prompt_with_tools()
+                                "content": PromptManager.get_unified_prompt()
                             },
                             {"role": "user", "content": user_prompt},
                         ]
@@ -634,7 +604,7 @@ class LLMClient:
                         logger.info(f"[DEBUG] Using previous_response_id: {response.id}")
 
                         # Use appropriate reasoning effort for follow-up call too
-                        follow_up_reasoning_effort = "medium" if has_web_search else "minimal"
+                        follow_up_reasoning_effort = "low" if has_web_search else "minimal"
 
                         if has_web_search:
                             logger.info(f"[OpenAI] [{correlation_id}] Web search tool available for follow-up call")
@@ -642,7 +612,7 @@ class LLMClient:
                         # Determine appropriate reasoning effort for follow-up call
                         follow_up_tools = self.OPENAI_TOOLS.copy()
                         has_web_search_followup = any(tool.get("type") == "web_search" for tool in follow_up_tools)
-                        follow_up_reasoning_effort = "medium" if has_web_search_followup else "minimal"
+                        follow_up_reasoning_effort = "low" if has_web_search_followup else "minimal"
 
                         logger.info(f"[OpenAI] [{correlation_id}] Follow-up call using reasoning effort: {follow_up_reasoning_effort}")
 
@@ -666,7 +636,7 @@ class LLMClient:
                                 try:
                                     # Use appropriate reasoning effort for final attempt
                                     has_web_search_final = any(tool.get("type") == "web_search" for tool in self.OPENAI_TOOLS)
-                                    final_reasoning_effort = "medium" if has_web_search_final else "minimal"
+                                    final_reasoning_effort = "low" if has_web_search_final else "minimal"
 
                                     final_response = self.client.responses.create(
                                         model=settings.openai_model,

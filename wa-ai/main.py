@@ -20,8 +20,6 @@ from app.prompts import PromptManager
 # Import PDF handler
 from handlers.handle_pdf_message import pdf_handler
 
-# Import product recommendation handler
-from handlers.handle_product_recommendation import product_recommendation_handler
 
 # Import the correct two-step media URL function
 from integrations.ocr_supabase import get_media_download_url_from_id
@@ -280,37 +278,6 @@ async def process_pdf_message(message_data: Dict[str, Any], insert_id: int) -> O
 
     except Exception as e:
         logger.error(f"[PDF] [DIAGNOSTIC] Exception during PDF processing for insert_id: {insert_id}: {type(e).__name__}: {e}")
-        return None
-
-
-async def process_product_recommendation_message(insert_id: int) -> Optional[str]:
-    """
-    Process a product recommendation message using the product recommendation handler.
-
-    Args:
-        insert_id: Database insert ID of the message
-
-    Returns:
-        AI response text if successful, None if failed
-    """
-    try:
-        logger.info(f"[PRODUCT-REC] [DIAGNOSTIC] Starting product recommendation processing for insert_id: {insert_id}")
-
-        # Call product recommendation handler
-        logger.info(f"[PRODUCT-REC] [DIAGNOSTIC] Calling product recommendation handler for insert_id: {insert_id}")
-        result = await product_recommendation_handler.handle_product_recommendation(
-            insert_id=insert_id
-        )
-
-        if result.get("success"):
-            logger.info(f"[PRODUCT-REC] [DIAGNOSTIC] Successfully processed product recommendation for insert_id: {insert_id}, response length: {len(result.get('ai_response', ''))}")
-            return result["ai_response"]
-        else:
-            logger.error(f"[PRODUCT-REC] [DIAGNOSTIC] Product recommendation processing failed for insert_id: {insert_id}: {result.get('error')}")
-            return None
-
-    except Exception as e:
-        logger.error(f"[PRODUCT-REC] [DIAGNOSTIC] Exception during product recommendation processing for insert_id: {insert_id}: {type(e).__name__}: {e}")
         return None
 
 
@@ -580,26 +547,15 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
             "note": "Response already sent by PDF handler"
         }
 
-    # Use intelligent tool decision based on message content
-    message_analysis = PromptManager.analyze_message_type(current_message)
+    # Use autonomous tool decision based on message content
+    message_analysis = PromptManager.should_use_tools_autonomously(current_message)
 
-    if message_analysis["use_tools"]:
-        # Message needs tools - use product recommendation handler
-        logger.info(f"[AI-DECISION] Message type: {message_analysis['type']}, using tools")
-        product_rec_response = await process_product_recommendation_message(payload.id or 0)
-
-        if product_rec_response:
-            logger.info(f"[PRODUCT-REC] Product recommendation processed successfully, response sent by handler")
-            return {
-                "ok": True,
-                "conversation_count": len(recent_messages),
-                "ai_reply": product_rec_response,
-                "processed_as": "product_recommendation",
-                "note": "Response already sent by product recommendation handler"
-            }
+    if message_analysis["decision"] == "simple_greeting":
+        # Simple greeting - no tools needed
+        logger.info(f"[AI-DECISION] Decision: {message_analysis['decision']}, using simple response")
     else:
-        # Simple message - no tools needed
-        logger.info(f"[AI-DECISION] Message type: {message_analysis['type']}, using simple response")
+        # Everything else - let AI decide autonomously with tools available
+        logger.info(f"[AI-DECISION] Decision: {message_analysis['decision']}, using autonomous tools")
 
     # Use the current message for AI response (regular text processing)
     user_message_to_respond = current_message
@@ -672,22 +628,14 @@ async def new_message(payload: NewMessage, x_webhook_token: str = Header(None)):
             "Generează un răspuns helpful și natural în română, folosind contextul complet de mai sus."
         )
 
-        # Use intelligent LLM call based on message analysis
+        # Use autonomous LLM call - AI decides everything
         correlation_id = generate_correlation_id()
 
-        if message_analysis["use_tools"]:
-            # Use tools for product-related queries
-            logger.info(f"[LLM] Using tools for message type: {message_analysis['type']}")
-            reply_text, function_call_details = await llm_client.call_llm_with_tools(
-                PromptManager.get_prompt_with_tools(), user_prompt, correlation_id
-            )
-        else:
-            # Use simple LLM for greetings and general queries
-            logger.info(f"[LLM] Using simple response for message type: {message_analysis['type']}")
-            reply_text = llm_client.call_llm(
-                PromptManager.get_prompt_without_tools(), user_prompt
-            )
-            function_call_details = None
+        # Always use tools - let AI decide when to use them autonomously
+        logger.info(f"[LLM] Using autonomous tools for decision: {message_analysis['decision']}")
+        reply_text, function_call_details = await llm_client.call_llm_with_tools(
+            PromptManager.get_unified_prompt(), user_prompt, correlation_id
+        )
 
         # Update conversation session with user message, function calls (if any), and AI response
         if session:

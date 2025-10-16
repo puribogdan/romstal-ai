@@ -1,51 +1,45 @@
 """
 Centralized prompt management for Romstal Assistant.
-Single source of truth for all system prompts and tool usage policies.
+Single source of truth for all system prompts with autonomous tool decision making.
 """
 
 from typing import Dict, Any
 
 
 class PromptManager:
-    """Centralized management of all system prompts with unified tool decision policies."""
+    """Centralized management of all system prompts with autonomous tool decision making."""
 
-    # Single unified system prompt with embedded tool decision policies
+    # Single unified system prompt with autonomous tool decision making
     UNIFIED_ROMSTAL_PROMPT = """
-Ești asistentul Romstal.
+Ești asistentul Romstal. Ajută clienții cu informații despre produse, recomandări și suport.
 
-POLITICA DE DECIZIE A TOOL-URILOR
-1) Saluturi / small talk / întrebări generale (ex: "Hi", "Bună", "Ce faci?"):
-   - Răspunde prietenos, concis.
-   - NU apela niciun tool.
+INSTRUMENTELE TALE:
+1. fetch_product_details(code)
+   - Folosește când utilizatorul oferă un cod de produs clar (ex: "64px9822")
+   - Returnează detalii complete despre produs: nume, preț, disponibilitate, link oficial
+   - Dacă codul nu e valid, vei primi eroare și poți cere clarificare
 
-2) Cod de produs CLAR (ex: 64px9822, fără text în plus):
-   - Apelează funcția `fetch_product_details` cu exact acel cod.
-   - După tool_result: afișează nume, preț (dacă există), disponibilitate, linkul oficial.
-   - Dacă `ok=False` sau codul nu e valid → spune politicos și cere un cod valid.
+2. web_search(query)
+   - Folosește pentru căutări generale de produse, recomandări, specificații  
+   - Returnează maxim 5 rezultate relevante cu nume produs, cod și link
+   - Dacă nu găsești produse specifice, arată și pagini de categorie generale
 
-3) Căutare / recomandări / "ai link", "ce produs?", specificații, compatibilități:
-   - Dacă informația nu e evidentă din context, FOLOSEȘTE `web_search` (romstal.ro).
-   - Returnează 3–6 rezultate relevante: **Nume** — motiv scurt (max 1 propoziție)
-     pe linia următoare URL direct. Nu inventa linkuri.
-   - Dacă nu găsești produse exacte, arată și pagini de categorie și spune că sunt generale.
-   - Dacă nu există rezultate utile: spune explicit că nu ai găsit pagini relevante pe romstal.ro.
+DECIZII AUTONOME:
+- Decide TU când să folosești instrumentele bazat pe context și intenția utilizatorului
+- Pentru saluturi simple și conversație generală, răspunde direct fără instrumente
+- Când ai nevoie de informații despre produse, alege instrumentul potrivit în mod natural
+- Dacă cererea e ambiguă, cere clarificare înainte să cauți
+- Optimizează pentru conversație naturală și răspunsuri utile
 
-4) Dacă cererea este ambiguă:
-   - Pune o singură clarificare scurtă înainte să folosești tool-uri.
+REGULI GENERALE:
+- Răspunde în română, prietenos și concis
+- Dacă un instrument eșuează, explică politicos și oferă alternative
 
-REGULI GENERALE
-- Răspunde în română, prietenos și concis.
-- Nu modifica URL-urile.
-- Nu folosi tool-uri când nu aduc valoare (ex: saluturi, întrebări simple).
-- Nu repeta aceleași informații.
+EXEMPLE DE UTILIZARE NATURALĂ:
+- "Bună!" → salut prietenos, fără instrumente
+- "Am codul 64px9822" → fetch_product_details("64px9822")
+- "Caut o baterie de bucătărie" → web_search("baterie bucătărie romstal")
 
-EXEMPLE GHID:
-- "Hi" → răspuns scurt, fără tool.
-- "Cod 64px9822" → `fetch_product_details`.
-- "Îmi recomanzi o baterie de bucătărie?" → `web_search`.
-- "Am nevoie de detalii, dar nu știu exact modelul" → întreabă o clarificare, apoi decide.
-
-IMPORTANT: Aplică această politică pentru fiecare mesaj. Dacă mesajul este un simplu salut sau small talk, răspunde direct fără tool-uri. Dacă necesită informații despre produse, folosește tool-urile disponibile în mod inteligent.
 """
 
     @staticmethod
@@ -64,90 +58,71 @@ IMPORTANT: Aplică această politică pentru fiecare mesaj. Dacă mesajul este u
         return PromptManager.get_unified_prompt()
 
     @staticmethod
-    def should_use_tools(message_text: str, context: str = "") -> bool:
+    def get_available_tools_info() -> Dict[str, Any]:
         """
-        Helper function to determine if tools should be used based on message content.
-        This implements the decision logic from the unified prompt.
+        Return information about available tools for autonomous decision making.
+        This gives the AI context about what tools are available without forcing decisions.
         """
-        if not message_text:
-            return False
-
-        message_lower = message_text.lower().strip()
-        context_lower = context.lower() if context else ""
-
-        # 1. Simple greetings and small talk - NO tools
-        simple_phrases = {
-            "hi", "hello", "hey", "salut", "bună", "buna", "ce faci", "cum ești", "cum esti",
-            "mulțumesc", "mersi", "thanks", "pa", "bye", "la revedere", "ne revedem"
+        return {
+            "fetch_product_details": {
+                "description": "Lookup specific product details by code (e.g., '64px9822')",
+                "when_to_use": "When user provides a clear product code",
+                "parameters": ["code"]
+            },
+            "web_search": {
+                "description": "Search for products, recommendations, and general information. Return up to 5 relevant results with product name, code, and URL for that product",
+                "when_to_use": "For product searches, recommendations, and general queries",
+                "parameters": ["query"]
+            }
         }
-
-        if message_lower in simple_phrases:
-            return False
-
-        # Check if message starts with simple greeting patterns
-        greeting_patterns = ["hi", "hello", "hey", "salut", "bună", "buna"]
-        if any(message_lower.startswith(pattern) for pattern in greeting_patterns):
-            return False
-
-        # 2. Clear product codes - YES tools (fetch_product_details)
-        # Look for patterns like "cod 64px9822" or just "64px9822"
-        import re
-        product_code_pattern = r'\b\d+[a-zA-Z]*\d+[a-zA-Z]*\d+\b'
-        if re.search(product_code_pattern, message_text):
-            # Check if it's a standalone code or preceded by "cod"
-            words = message_text.split()
-            for word in words:
-                if re.match(product_code_pattern, word):
-                    # If it's just the code or preceded by "cod", use tools
-                    if len(words) <= 2 and (len(words) == 1 or words[0].lower() == "cod"):
-                        return True
-
-        # 3. Product-related queries - YES tools (web_search)
-        product_keywords = {
-            "produs", "produse", "recomand", "recomanda", "recomandă", "caut", "vreau",
-            "cumpar", "cumpăr", "pret", "preț", "disponibil", "stoc", "link", "specificatii",
-            "compatibil", "baterie", "chiuveta", "cada", "dus", "robinet", "teava", "țeavă",
-            "centrala", "centrală", "radiator", "parchet", "gresie", "faianta", "faianță"
-        }
-
-        # Check both message and context for product keywords
-        combined_text = f"{message_lower} {context_lower}"
-        if any(keyword in combined_text for keyword in product_keywords):
-            return True
-
-        # 4. Ambiguous cases - NO tools (let AI ask for clarification)
-        return False
 
     @staticmethod
-    def analyze_message_type(message_text: str) -> Dict[str, Any]:
+    def get_autonomous_prompt() -> str:
         """
-        Analyze message to determine type and recommended action.
-        Returns dict with analysis results.
+        Get the autonomous prompt that gives AI full control over tool decisions.
+        This replaces the rigid decision framework with flexible, context-aware guidance.
+        """
+        tools_info = PromptManager.get_available_tools_info()
+
+        # Build tools description for the prompt
+        tools_description = "\n".join([
+            f"- {tool_name}: {info['description']}"
+            for tool_name, info in tools_info.items()
+        ])
+
+        return f"""
+Ești asistentul Romstal. Ajută clienții cu informații despre produse și recomandări.
+
+INSTRUMENTELE DISPONIBILE:
+{tools_description}
+
+DECIZII AUTONOME:
+- Decide TU când și care instrument să folosești bazat pe context și intenția utilizatorului
+- Pentru conversație generală și saluturi, răspunde direct fără instrumente
+- Când ai nevoie de informații specifice, alege instrumentul potrivit în mod natural
+- Dacă nu ești sigur, cere clarificare înainte să cauți
+- Fii eficient și conversațional
+- Cand sunt cerute recomandari de produse, foloseste web_search si raspunde doar cu rezultate pe care le gasesti
+- Nu recomanda niciodata produse care nu sunt disponibile pe romstal.ro
+- Nu recomanda produse sau link-uri din catalog search, doar din rezultatele web_search
+
+Răspunde în română, prietenos și util.
+""".strip()
+
+    @staticmethod
+    def should_use_tools_autonomously(message_text: str, context: str = "") -> Dict[str, Any]:
+        """
+        Let AI make completely autonomous tool decisions without any suggestions or hints.
+        AI decides everything autonomously.
         """
         if not message_text:
-            return {"type": "empty", "use_tools": False, "action": "simple_response"}
+            return {"decision": "empty_message"}
 
         message_lower = message_text.lower().strip()
 
-        # Simple greetings
-        simple_phrases = {"hi", "hello", "hey", "salut", "bună", "buna", "ce faci", "cum ești", "cum esti"}
-        if message_lower in simple_phrases:
-            return {"type": "greeting", "use_tools": False, "action": "simple_response"}
+        simple_greetings = {"hi", "hello", "hey", "salut", "bună", "buna", "ce faci", "cum ești"}
+        if message_lower in simple_greetings:
+            return {"decision": "simple_greeting"}
 
-        # Product codes
-        import re
-        product_code_pattern = r'\b\d+[a-zA-Z]*\d+[a-zA-Z]*\d+\b'
-        if re.search(product_code_pattern, message_text):
-            words = message_text.split()
-            for word in words:
-                if re.match(product_code_pattern, word):
-                    if len(words) <= 2 and (len(words) == 1 or words[0].lower() == "cod"):
-                        return {"type": "product_code", "use_tools": True, "tool": "fetch_product_details", "code": word}
-
-        # Product-related queries
-        product_keywords = {"produs", "produse", "recomand", "recomanda", "recomandă", "caut", "vreau", "cumpar", "cumpăr"}
-        if any(keyword in message_lower for keyword in product_keywords):
-            return {"type": "product_search", "use_tools": True, "tool": "web_search"}
-
-        # Default case
-        return {"type": "general", "use_tools": False, "action": "simple_response"}
+        # For everything else, let AI decide autonomously
+        return {"decision": "autonomous"}
